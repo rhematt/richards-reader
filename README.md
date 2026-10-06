@@ -260,20 +260,27 @@ extracted text, annotations, and reading content are not uploaded to the Mac.
   Page and zoom controls are inside the original panel.
 - On a phone, **Aa** opens the settings sheet. The bottom bar keeps sentence
   navigation, play/pause and speed available while reading. Choose a verified
-  device voice in the settings sheet. The reading ruler stays over the page as
-  text scrolls; drag its round grip to move it. **Follow speech with ruler**
-  can be changed in Reading focus settings.
+  device voice in the settings sheet. The accessible view and Original PDF
+  each have a viewport ruler with their own position. Drag the round grip in
+  either view without moving the other ruler or scrolling the page. Both use
+  the same appearance settings. **Follow speech with ruler** can be changed in
+  Reading focus settings.
 - Click a reflowed block to highlight its source bounding box. Click a PDF page
   to select the nearest source block and reveal it in the reading view. Scroll
   sync uses block anchors and pauses when the other pane was just manipulated.
-- Use page arrows, heading navigation, source zoom, pane divider, or maximise
+- Use page arrows, the nested **Outline** sheet, source zoom, pane divider, or maximise
   the original. Search returns blocks and focuses the matching source region.
 - Reading settings control typography, colours, focus ruler, visual filters,
-  and speech filters separately. Presets can be edited; profiles save locally.
+  and speech filters separately. Sentence and current-word highlight colours
+  have separate controls. Presets can be edited; profiles save locally and can
+  be exported or imported as JSON without document or annotation content.
 - Speech uses only voices whose browser `localService` property is exactly
   `true`. If the browser cannot verify a device voice, Reader disables speech.
-  Sentence clicks start speech there; word highlighting follows boundary
-  events where the browser supplies them.
+  A single sentence click starts speech there after a brief double-click
+  window. Double-clicking a word opens its offline definition without changing
+  speech or source position. Drag selection and touch selection also offer
+  **Define**. Word highlighting follows speech boundary events where the
+  browser supplies them.
 - Bookmarks and simple notes are attached to page/bounding-box anchors and
   held only for the current document session. Closing the document destroys
   the PDF.js document, clears rendered pages and extracted blocks, and stops
@@ -288,6 +295,7 @@ extracted text, annotations, and reading content are not uploaded to the Mac.
 | Source model | PDF.js document, page dimensions, text blocks, categories, bounding boxes, image/table regions | Opening browser and its PDF.js worker |
 | Accessible view | Reflowed prose, detected headings, source crops, visual filters | Opening browser DOM and memory |
 | Reading stream | Sentence sequence and independent speech filters | Opening browser; verified local/device speech voice |
+| Review layer | Session annotations in PDF page coordinates; new marked-PDF export | Opening browser only |
 
 For a **local PDF**, File API bytes go from the device's file picker into a
 `Uint8Array`, then into PDF.js in that device's browser. PDF.js parses and
@@ -327,7 +335,9 @@ captions, and tables use source-aware classification. Repeated page furniture is
 from reading by default but remains in the source model. Aligned text tables
 become HTML tables only when columns are consistent; otherwise a source crop
 is shown. Embedded PDF image operators are cropped from the rendered source.
-Equations detected from text are shown as source regions. Complex vector
+Equations detected from text or a high-confidence layout region are shown as
+source regions, including aligned matrices without extractable math symbols.
+Complex vector
 figures, untagged structure, unusual writing directions, rotated text, and
 some multi-column layouts can still be misidentified; inspect the original before
 relying on the projection. Reader does not invent missing structure.

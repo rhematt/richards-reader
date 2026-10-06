@@ -126,6 +126,34 @@ export const v2VectorGraphPdf = () => pdfFixture([
   { x: 50, y: 330, text: 'Prose after the graph.' }
 ], { graphics: 'q 0.2 w 80 405 m 80 550 l 285 550 l S 80 420 m 240 525 l S Q' });
 
+export const v2SymbolFreeMatrixPdf = () => pdfFixture([
+  { x: 50, y: 747, text: 'Matrix Source Study', size: 25 },
+  { x: 50, y: 683, text: 'Prose before the matrix remains readable.' },
+  { x: 190, y: 618, text: 'a b c', size: 15 },
+  { x: 190, y: 597, text: 'd e f', size: 15 },
+  { x: 190, y: 576, text: 'g h i', size: 15 },
+  { x: 485, y: 597, text: '(5)' },
+  { x: 50, y: 527, text: 'Prose after the matrix resumes correctly.' }
+], { graphics: 'q 1 w 177 565 m 177 632 l 181 632 l S 255 565 m 255 632 l 251 632 l S Q' });
+
+export const v2BorderlessTablePdf = () => pdfFixture([
+  { x: 50, y: 747, text: 'Borderless Source Table', size: 25 },
+  { x: 50, y: 690, text: 'The prose before the table remains separate.' },
+  { x: 50, y: 639, text: 'Table 3. Borderless outcomes.' },
+  ...[['Group', 'Before', 'After'], ['Control', '12', '13'], ['Treatment', '12', '19']]
+    .flatMap((row, i) => row.map((text, j) => ({ x: [55, 245, 395][j], y: 600 - i * 24, text }))),
+  { x: 50, y: 492, text: 'The prose after the table continues.' }
+]);
+
+export const v2IrregularTablePdf = () => pdfFixture([
+  { x: 50, y: 747, text: 'Irregular Source Table', size: 25 },
+  { x: 50, y: 690, text: 'Prose introduces uncertain merged cells.' },
+  ...[['Group', 'Combined outcome'], ['Control', '12', '13'], ['Treatment', '12', '19']]
+    .flatMap((row, i) => row.map((text, j) => ({ x: [55, 245, 395][j], y: 625 - i * 24, text }))),
+  { x: 50, y: 505, text: 'Table 4. Merged header cells.' },
+  { x: 50, y: 465, text: 'The discussion continues after the source table.' }
+]);
+
 // First-page metadata and a dense small-font figure must not make ordinary
 // abstract lines look like headings or turn affiliations into a source table.
 export const v2BodyScalePdf = () => pdfFixture([

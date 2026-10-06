@@ -65,3 +65,16 @@ test('MATH-010: a detected display formula claims its external equation number',
   assert.equal(regions[0].equationNumber, '4');
   assert.equal(regions[0].text, 'Equation 4');
 });
+
+test('MATH-011: an isolated aligned matrix requests local inference and only a strong equation proposal owns it', () => {
+  const lines = [
+    ...['a b c', 'd e f', 'g h i'].map((text, index) => ({ text, fontSize: 15,
+      box: { x: 190, y: 160 + index * 21, w: 75, h: 15 }, runs: [{ id: `row${index}`, text }] })),
+    { text: 'Ordinary surrounding prose.', fontSize: 12, box: { x: 50, y: 255, w: 430, h: 12 }, runs: [{ id: 'prose', text: 'Ordinary surrounding prose.' }] }
+  ];
+  assert.equal(needsLayoutInference({ lines, imageBoxes: [], width: 600, height: 800 }), true);
+  const proposal = { type: 'equation', confidence: .97, bounds: { x: 175, y: 155, w: 120, h: 70 } };
+  const owned = mergeDetectedRegions([], [proposal], lines, 1);
+  assert.deepEqual(owned[0]?.sourceObjectIds, ['row0', 'row1', 'row2']);
+  assert.equal(mergeDetectedRegions([], [{ ...proposal, confidence: .81 }], lines, 1).length, 0);
+});

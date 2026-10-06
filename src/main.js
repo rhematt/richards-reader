@@ -1,6 +1,6 @@
 import './style.css';
 import { openPdf, refineComplexPages, citationsIn, speechText, equationSpeechText } from './model.js';
-import { buildOutline, flattenOutline } from './layout/outline.js';
+import { buildOutline } from './layout/outline.js';
 import { layoutDetectorStatus } from './layout/detector.js';
 import { PROFILE_SETTING_IDS, WORD_HIGHLIGHT_DEFAULT, exportProfile, importProfile } from './profile.js';
 import { defineWord } from './dictionary/index.js';
@@ -130,6 +130,7 @@ async function closeDocument() {
   state.reviewTouchScroll = null;
   state.activePenPointer = null;
   $('annotation-panel').hidden = true;
+  closeOutline();
   $('review-mode-button').disabled = true;
   document.body.classList.remove('document-open');
   for (const task of state.renderTasks.values()) task.cancel();
@@ -146,7 +147,7 @@ async function closeDocument() {
   sourceContent.replaceChildren(empty('Open a PDF', 'Choose a file from this device or drop one here. Its bytes stay in this browser.'));
   sourceContent.classList.remove('has-pages');
   readerContent.replaceChildren(empty('Read with context', 'Reflowed content stays linked to the authoritative original.'));
-  $('heading-select').replaceChildren(new Option('Headings', ''));
+  $('outline-tree').replaceChildren();
   $('reading-progress').textContent = '0% · p. —/—';
   $('bookmark-list').textContent = 'None yet. Bookmarks and notes are cleared when the document closes.';
   $('close-button').disabled = true;
@@ -678,12 +679,30 @@ function collectSpeechItems() {
   return items;
 }
 function refreshHeadings() {
-  const select = $('heading-select'); select.replaceChildren(new Option('Headings', ''));
-  for (const node of flattenOutline(buildOutline(state.model.pages))) {
-    const indent = '\u00a0\u00a0'.repeat(node.level - 1);
-    select.add(new Option(`${indent}${node.text.slice(0, 55)} · p.${node.page}`, node.id));
-  }
+  const tree = $('outline-tree'); tree.replaceChildren();
+  if (!state.model) return;
+  const nodes = buildOutline(state.model.pages);
+  if (!nodes.length) { tree.textContent = 'No section headings were identified in this document.'; return; }
+  const blocks = new Map(state.model.pages.flatMap(page => page.blocks).map(block => [block.id, block]));
+  const branch = entries => {
+    const list = document.createElement('ul');
+    for (const node of entries) {
+      const item = document.createElement('li');
+      const button = document.createElement('button'); button.type = 'button';
+      button.dataset.outlineId = node.id; button.dataset.level = String(node.level);
+      const name = document.createElement('span'); name.textContent = node.text;
+      const page = document.createElement('small'); page.textContent = `p. ${node.page}`;
+      button.append(name, page);
+      button.addEventListener('click', () => { focusBlock(blocks.get(node.id), 'source'); closeOutline(); });
+      item.append(button);
+      if (node.children.length) item.append(branch(node.children));
+      list.append(item);
+    }
+    return list;
+  };
+  tree.append(branch(nodes));
 }
+function closeOutline() { $('outline-panel').hidden = true; $('outline-button').setAttribute('aria-expanded', 'false'); }
 
 function focusBlock(block, from = 'reader', gentle = false) {
   if (!block || !state.model) return;
@@ -990,7 +1009,9 @@ function setupEvents() {
   $('search-previous').addEventListener('click', () => moveSearch(-1));
   $('search-next').addEventListener('click', () => moveSearch(1));
   $('search-input').addEventListener('keydown', event => { if (event.key === 'Enter') moveSearch(event.shiftKey ? -1 : 1); });
-  $('heading-select').addEventListener('change', event => { const block = state.model?.pages.flatMap(page => page.blocks).find(b => b.id === event.target.value); if (block) focusBlock(block, 'source'); });
+  $('outline-button').addEventListener('click', () => { closeMobileMenu(); closeSettings(); $('outline-panel').hidden = false; $('outline-button').setAttribute('aria-expanded', 'true'); $('outline-close').focus(); });
+  $('outline-close').addEventListener('click', closeOutline);
+  $('outline-panel').addEventListener('keydown', event => { if (event.key === 'Escape') closeOutline(); });
   $('maximize-source').addEventListener('click', () => { const maximised = document.body.classList.toggle('source-maximised'); document.documentElement.style.setProperty('--source-width', maximised ? 'calc(100% - 8px)' : '50%'); $('maximize-source').textContent = maximised ? 'Restore panes' : 'Maximise original'; });
   $('settings-button').addEventListener('click', openSettings);
   $('focus-button').addEventListener('click', () => setFocusMode(true));

@@ -59,7 +59,9 @@ export function detectSourceRegions({ lines, imageBoxes, page, width, height, me
       // Author names, affiliations and addresses often form three aligned
       // first-page rows. Their position under the title disambiguates them
       // from a data table; retain their exact text in the prose projection.
-      if (page === 1 && box.y < height * .24) { rows = []; return; }
+      const nearbyTableCaption = available().some(line => /^table\s*\d+[.:\s]/i.test(line.text) &&
+        Math.abs(line.box.y - box.y) < height * .18);
+      if (page === 1 && box.y < height * .24 && !nearbyTableCaption) { rows = []; return; }
       const count = median(rows.map(row => row.cells.length));
       const columns = Array.from({ length: count }, (_, index) => median(rows.map(row => row.cells[index]?.x).filter(Number.isFinite)));
       const regular = rows.every(row => row.cells.length === count && row.cells.every((cell, index) => Math.abs(cell.x - columns[index]) < Math.max(12, medianSize * 1.2)));
@@ -124,7 +126,12 @@ export function mergeDetectedRegions(sourceRegions, detections, lines, page) {
     const members = lines.filter(line => containsCenter(box, line.box, 0) &&
       !regions.some(region => region !== matching && region.sourceObjectIds.some(id => line.runs.some(run => run.id === id))));
     if (!matching && !members.length) continue;
-    if (!matching && detection.type === 'equation' && !members.some(line => /[=∑∫√≈≤≥()\[\]{}]/u.test(line.text))) continue;
+    if (!matching && detection.type === 'equation' && !members.some(line => /[=∑∫√≈≤≥()\[\]{}]/u.test(line.text))) {
+      const rowHeight = median(members.map(line => line.box.h));
+      const alignedMatrix = detection.confidence >= .94 && members.length >= 2 &&
+        box.h >= rowHeight * 2.5 && members.every(line => line.text.length <= 35 && line.box.w <= box.w * .9);
+      if (!alignedMatrix) continue;
+    }
     if (!matching && detection.type === 'table' && members.length < 2 && detection.confidence < .9) continue;
     if (!matching && detection.type === 'image' && box.w < 45 && box.h < 35) continue;
     const equationNumberLine = detection.type === 'equation' ? lines.find(line =>

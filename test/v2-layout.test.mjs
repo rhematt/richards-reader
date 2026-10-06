@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import { runnerImport } from 'vite';
-import { v2CompositePdf, v2MixedBandsPdf, v2VectorGraphPdf, v2BodyScalePdf, v2TitleHeadingsPdf, v2DenseVectorFigurePdf } from './pdf-fixture.mjs';
+import { v2CompositePdf, v2MixedBandsPdf, v2VectorGraphPdf, v2BodyScalePdf, v2TitleHeadingsPdf, v2DenseVectorFigurePdf, v2SymbolFreeMatrixPdf, v2BorderlessTablePdf, v2IrregularTablePdf } from './pdf-fixture.mjs';
 
 Uint8Array.prototype.toHex ??= function () { return Buffer.from(this).toString('hex'); };
 Map.prototype.getOrInsertComputed ??= function (key, callback) {
@@ -145,5 +145,54 @@ test('FIGURE-011: a dense vector montage beside prose owns its internal text thr
     const prose = blocks.filter(block => ['title', 'heading', 'body'].includes(block.type)).map(block => block.text).join(' ');
     for (const forbidden of ['Panel label', 'AIRPORT SKETCH']) assert.ok(!prose.includes(forbidden), `${forbidden} belongs to figure`);
     assert.ok(prose.includes('Left prose 1') && prose.includes('Right prose continues'));
+  } finally { await model.task.destroy(); }
+});
+
+test('MATH-004/010/011: a model-proposed symbol-free matrix owns all rows and its external number', async () => {
+  const { module: { openPdf, refinePdfPage, speechText } } = await runnerImport('/src/model.js');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
+  const model = await openPdf(v2SymbolFreeMatrixPdf());
+  try {
+    await refinePdfPage(model, 1, [{ type: 'equation', confidence: .97, source: 'synthetic local model',
+      bounds: { x: 170, y: 164, w: 120, h: 72 } }]);
+    const blocks = model.pages[0].blocks.filter(block => !['header', 'footer', 'page_number'].includes(block.type));
+    assert.deepEqual(blocks.map(block => [block.type, block.type === 'equation' ? null : block.text]), [
+      ['title', 'Matrix Source Study'], ['body', 'Prose before the matrix remains readable.'],
+      ['equation', null], ['body', 'Prose after the matrix resumes correctly.']
+    ]);
+    const equation = blocks[2];
+    assert.equal(equation.equationNumber, '5');
+    assert.ok(equation.sourceObjectIds.length >= 4, 'three matrix rows and number have one source owner');
+    const prose = blocks.filter(block => block.type === 'body').map(speechText).join(' ');
+    for (const token of ['a b c', 'd e f', 'g h i', '(5)']) assert.ok(!prose.includes(token));
+    assert.ok(equation.bbox.x <= 190 && equation.bbox.x + equation.bbox.w >= 485, 'anchor includes external equation number');
+  } finally { await model.task.destroy(); }
+});
+
+test('TABLE-002/007: borderless cells stay in one source table after an above-caption', async () => {
+  const { module: { openPdf, speechText } } = await runnerImport('/src/model.js');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
+  const model = await openPdf(v2BorderlessTablePdf());
+  try {
+    const blocks = model.pages[0].blocks;
+    assert.deepEqual(blocks.map(block => block.type), ['title', 'body', 'table_caption', 'table', 'body']);
+    const table = blocks[3];
+    assert.equal(table.rows?.length, 3);
+    assert.ok(table.bbox.x <= 55 && table.bbox.x + table.bbox.w >= 400);
+    const speech = blocks.filter(block => block.type === 'body').map(speechText).join(' ');
+    for (const forbidden of ['Group', 'Control', 'Treatment', 'Before', 'After']) assert.ok(!speech.includes(forbidden));
+  } finally { await model.task.destroy(); }
+});
+
+test('TABLE-003/010: irregular merged header stays source-rendered rather than invented HTML', async () => {
+  const { module: { openPdf, speechText } } = await runnerImport('/src/model.js');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
+  const model = await openPdf(v2IrregularTablePdf());
+  try {
+    const blocks = model.pages[0].blocks;
+    assert.deepEqual(blocks.map(block => block.type), ['title', 'body', 'table', 'table_caption', 'body']);
+    assert.equal(blocks[2].rows, null, 'uncertain merged structure uses source crop');
+    const speech = blocks.filter(block => block.type === 'body').map(speechText).join(' ');
+    for (const forbidden of ['Combined outcome', 'Control', 'Treatment']) assert.ok(!speech.includes(forbidden));
   } finally { await model.task.destroy(); }
 });

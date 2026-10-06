@@ -25,7 +25,7 @@
     <div class="toolbar">
       <div class="toolbar-group"><button id="previous-page" type="button" aria-label="Previous page">‹</button><span id="page-indicator">Page — / —</span><button id="next-page" type="button" aria-label="Next page">›</button><button id="zoom-out" type="button" aria-label="Zoom out">−</button><output id="zoom-value">100%</output><button id="zoom-in" type="button" aria-label="Zoom in">+</button></div>
       <div class="toolbar-group search-group"><input id="search-input" type="search" placeholder="Search this document" aria-label="Search document"><span id="search-count"></span><button id="search-previous" type="button" aria-label="Previous match">↑</button><button id="search-next" type="button" aria-label="Next match">↓</button></div>
-      <div class="toolbar-group"><select id="heading-select" aria-label="Jump to heading"><option value="">Headings</option></select><button id="bookmark-button" type="button" title="Bookmark current source anchor">☆ Bookmark</button><button id="maximize-source" type="button">Maximise original</button><button id="focus-button" type="button">Focus mode</button><button id="review-mode-button" type="button" disabled aria-pressed="false">Review mode</button><button id="settings-button" type="button" aria-expanded="false">Reading settings</button></div>
+      <div class="toolbar-group"><button id="outline-button" type="button" aria-controls="outline-panel" aria-expanded="false">Outline</button><button id="bookmark-button" type="button" title="Bookmark current source anchor">☆ Bookmark</button><button id="maximize-source" type="button">Maximise original</button><button id="focus-button" type="button">Focus mode</button><button id="review-mode-button" type="button" disabled aria-pressed="false">Review mode</button><button id="settings-button" type="button" aria-expanded="false">Reading settings</button></div>
     </div>
 
     <main class="workspace">
@@ -47,6 +47,7 @@
     <button id="define-button" class="define-button" type="button" hidden>Define</button>
     <aside id="dictionary-panel" class="dictionary-panel" aria-label="Local dictionary" hidden><div class="dictionary-heading"><h2 id="dictionary-headword">Definition</h2><button id="dictionary-close" type="button" aria-label="Close definition">✕</button></div><div id="dictionary-result"></div><small>Princeton WordNet 3.0 · stored with Reader</small></aside>
     <aside id="annotation-panel" class="annotation-panel" aria-label="Annotations" hidden><div class="dictionary-heading"><h2>Annotations</h2><button id="annotation-panel-close" type="button" aria-label="Close annotations">✕</button></div><div id="annotation-list">No session annotations.</div></aside>
+    <aside id="outline-panel" class="outline-panel" aria-label="Document outline" hidden><div class="dictionary-heading"><h2>Document outline</h2><button id="outline-close" type="button" aria-label="Close outline">✕</button></div><nav id="outline-tree" aria-label="Sections"></nav></aside>
 
     <aside id="settings-panel" class="settings-panel" hidden aria-label="Reading settings">
       <div class="settings-heading"><h2>Reading settings</h2><button id="settings-close" aria-label="Close settings">✕</button></div>

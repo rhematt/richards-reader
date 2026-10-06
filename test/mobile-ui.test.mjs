@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { ordinaryPdf, figureAndTablePdf } from './pdf-fixture.mjs';
+import { ordinaryPdf, figureAndTablePdf, v2HierarchyPdf } from './pdf-fixture.mjs';
 
 const edge = process.env.READER_TEST_BROWSER || '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 const production = process.env.READER_TEST_PRODUCTION === '1';
@@ -71,8 +71,10 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
   const temp = await mkdtemp(join(tmpdir(), 'reader-mobile-test-'));
   const ordinary = join(temp, 'ordinary.pdf');
   const complex = join(temp, 'complex.pdf');
+  const hierarchy = join(temp, 'hierarchy.pdf');
   await writeFile(ordinary, ordinaryPdf());
   await writeFile(complex, figureAndTablePdf());
+  await writeFile(hierarchy, v2HierarchyPdf());
   const server = spawn(process.execPath, production ? ['server.mjs'] : ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
     cwd: process.cwd(), stdio: 'ignore', env: { ...process.env, HOST: '127.0.0.1', PORT: String(port) }
   });
@@ -99,7 +101,7 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
         return { readerWidth: reader.width, sourceWidth: source.width, appWidth: document.documentElement.scrollWidth, viewportWidth: innerWidth,
           original: visible('mobile-original-button'), menu: visible('mobile-menu-button'), settings: visible('mobile-settings-button'), play: visible('speak-button'),
           previous: visible('previous-sentence'), next: visible('next-sentence'), speed: visible('speech-rate'), search: visible('search-input'),
-          touchHeights: ['mobile-original-button','mobile-menu-button','mobile-settings-button','speak-button','previous-sentence','next-sentence','speech-rate','search-input','heading-select'].map(id => document.getElementById(id)?.getBoundingClientRect().height || 0) };
+          touchHeights: ['mobile-original-button','mobile-menu-button','mobile-settings-button','speak-button','previous-sentence','next-sentence','speech-rate','search-input','outline-button'].map(id => document.getElementById(id)?.getBoundingClientRect().height || 0) };
       })()`);
       assert.ok(layout.readerWidth >= width - 2, `${width}×${height}: reading pane fills the phone`);
       assert.ok(layout.sourceWidth === 0, `${width}×${height}: no permanent original pane`);
@@ -284,6 +286,13 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     assert.ok(await cdp.evaluate(`!document.querySelector('#annotation-panel').hidden && document.querySelector('#annotation-list .annotation-entry') && getComputedStyle(document.querySelector('#annotation-list .annotation-edit')).display === 'none'`), 'ANNOT-026: phone can navigate marks but cannot edit');
     await cdp.evaluate(`document.querySelector('#annotation-list .annotation-entry button').click()`);
     assert.ok(await cdp.evaluate(`document.body.classList.contains('mobile-original-open') && document.querySelector('.review-overlay [data-annotation-id]')`), 'ANNOT-014: phone annotation list jumps to source');
+    await cdp.file(hierarchy);
+    await until(() => cdp.evaluate(`document.querySelector('#reader-content')?.textContent.includes('1.1.1 Eligibility')`));
+    await cdp.evaluate(`document.querySelector('#outline-button').click()`);
+    const outline = await cdp.evaluate(`(() => { const panel = document.querySelector('#outline-panel'); const tree = document.querySelector('#outline-tree'); return { open: !panel.hidden, width: panel.getBoundingClientRect().width, nested: tree.querySelectorAll('ul ul ul').length, labels: [...tree.querySelectorAll('button[data-outline-id]')].map(button => button.textContent) }; })()`);
+    assert.ok(outline.open && outline.width >= 389 && outline.nested >= 1 && outline.labels.some(label => label.includes('1.1.1 Eligibility')), 'OUTLINE-002: phone sheet presents the parser hierarchy');
+    await cdp.evaluate(`document.querySelector('#outline-tree button[data-outline-id]:is([data-level="3"])').click()`);
+    assert.ok(await cdp.evaluate(`document.querySelector('#outline-panel').hidden && document.querySelector('#reader-content .block.selected')?.textContent.includes('1.1.1 Eligibility') && !!document.querySelector('.source-highlight')`), 'OUTLINE-002: nested entry navigates accessible heading and retains source anchor');
     await cdp.file(complex);
     await until(() => cdp.evaluate(`document.querySelector('#reader-content')?.textContent.includes('Figure and Table Preservation')`));
     await until(() => cdp.evaluate('window.readerDiagnostics.layoutMetrics.length > 0 || !!window.readerDiagnostics.layoutError'), 60000)

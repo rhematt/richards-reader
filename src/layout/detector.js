@@ -16,6 +16,16 @@ export function needsLayoutInference({ lines, imageBoxes, width, height }) {
   const left = narrow.filter(line => line.box.x + line.box.w / 2 < width / 2);
   const right = narrow.filter(line => line.box.x + line.box.w / 2 >= width / 2);
   if (left.length >= 3 && right.length >= 3) return true;
+  // A centred run of short aligned lines may be a matrix or derivation even
+  // when the font has no extractable mathematical symbols.
+  const short = lines.filter(line => line.box.y > height * .1 && line.box.y < height * .9 &&
+    line.box.x > width * .2 && line.box.x < width * .7 && line.box.w < width * .25 &&
+    line.text.length <= 32).sort((a, b) => a.box.y - b.box.y);
+  if (short.some((line, index) => {
+    const next = short[index + 1], third = short[index + 2];
+    return next && third && Math.abs(next.box.x - line.box.x) < 16 && Math.abs(third.box.x - line.box.x) < 16 &&
+      next.box.y - line.box.y < line.box.h * 2.4 && third.box.y - next.box.y < next.box.h * 2.4;
+  })) return true;
   return lines.some(line => line.runs?.length >= 3 ||
     (/[=∑∫√≈≤≥]/u.test(line.text) && line.text.length < 100 && line.box.x > width * .12));
 }
