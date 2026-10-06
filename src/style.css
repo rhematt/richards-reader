@@ -96,6 +96,21 @@ input:not([type='checkbox']):not([type='color']), select { min-height: 2.2rem; b
 .speechbar label { white-space: nowrap; font-size: .8rem; }
 .speechbar input { width: 4rem; }
 #speech-status { color: #51675a; font-size: .72rem; min-width: 8rem; }
+.reading-progress { color: #50685c; font-size: .72rem; white-space: nowrap; }
+.focus-exit { display: none; }
+.define-button { position: fixed; z-index: 12; min-width: 44px; min-height: 44px; box-shadow: 0 3px 12px #17271f44; }
+.dictionary-panel { position: fixed; z-index: 13; right: 1rem; bottom: 4.3rem; width: min(350px, calc(100vw - 2rem)); max-height: min(60vh, 420px); overflow: auto; padding: .9rem; background: #f8faf8; border: 1px solid #b9c8c0; border-radius: 10px; box-shadow: 0 8px 25px #17271f55; }
+.dictionary-panel[hidden], .define-button[hidden] { display: none; }
+.dictionary-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.dictionary-heading h2 { margin: 0; font-size: 1.1rem; }
+.dictionary-heading button { min-width: 44px; min-height: 44px; }
+.dictionary-panel p { margin: .65rem 0; font-size: .88rem; }
+.dictionary-panel small { color: #607367; }
+body.focus-mode .topbar, body.focus-mode .toolbar, body.focus-mode .source-pane, body.focus-mode .pane-divider { display: none; }
+body.focus-mode .reader-pane { flex: 1 1 100%; width: 100%; }
+body.focus-mode .speechbar #previous-paragraph, body.focus-mode .speechbar #next-paragraph, body.focus-mode .speechbar #voice-select, body.focus-mode .speechbar #speech-status, body.focus-mode .speechbar #mobile-settings-button { display: none; }
+body.focus-mode .focus-exit { display: block; position: fixed; z-index: 15; top: max(.5rem, env(safe-area-inset-top)); right: .6rem; min-width: 44px; min-height: 44px; box-shadow: 0 3px 12px #17271f44; }
+body.focus-mode .reader-content { padding-top: 4rem; }
 .settings-panel { position: fixed; z-index: 10; right: 0; top: 0; bottom: 0; width: min(390px, 94vw); background: #f8faf8; box-shadow: -8px 0 35px #1c35254d; display: flex; flex-direction: column; }
 .settings-panel[hidden] { display: none; }
 .settings-heading { display: flex; align-items: center; justify-content: space-between; padding: .8rem 1rem; border-bottom: 1px solid #cbd5ce; }
@@ -162,6 +177,10 @@ fieldset label input[type='checkbox'] { margin-left: auto; }
   .source-content { padding: 1.5rem .6rem; }
   .source-content.has-pages { width: max-content; min-width: 100%; }
   .speechbar { display: grid; grid-template-columns: 44px minmax(54px, 1fr) 44px auto 44px; gap: .2rem; min-height: 3.5rem; padding: .25rem .45rem max(.25rem, env(safe-area-inset-bottom)); }
+  .speechbar { position: relative; }
+  .reading-progress { position: absolute; right: .55rem; bottom: calc(100% + .2rem); background: var(--reader-bg, #fffdf8); padding: .1rem .3rem; border-radius: 4px; }
+  .dictionary-panel { right: .4rem; bottom: calc(4.2rem + env(safe-area-inset-bottom)); }
+  body.focus-mode .speechbar { grid-template-columns: 44px minmax(54px, 1fr) 44px auto; }
   .speechbar button { min-width: 44px; min-height: 44px; padding: .2rem .35rem; }
   #previous-sentence, #next-sentence { font-size: 0; }
   #previous-sentence::after { content: '‹'; font-size: 1.3rem; }

@@ -96,6 +96,17 @@ merge only after automated tests, dependency audit, real iPad Safari and real
 iPhone Safari, and external PDF interoperability checks have passed. Record
 unavailable device/app checks as pending, never as passes.
 
+**Interim V2 result, 6 Oct 2026:** The generated V2-STRUCT-001 composite
+fixture now passes exact sequence, graph-label/table-cell/equation suppression,
+source bounds and immutable input bytes. LAYOUT-004/005 mixed bands,
+HEAD-001/004/005/011/012/013 hierarchy, PROFILE-001 round trip,
+DICT-001/002/003 local lookup/selection, and browser Focus/Progress checks
+also pass. `npm test` passes 14/14 in the development browser, including the
+existing mobile suite; `npm run build` passes. These are the tested subset of
+the matrix, not V2 release acceptance. Region detection is currently
+deterministic; browser-local ML inference, broader structural fixtures, Review
+Mode/export, neural TTS and real-device checks are pending.
+
 ## Mobile UI acceptance — `mobile-ui` branch
 
 The phone presentation uses the existing PDF model, source anchors, reading

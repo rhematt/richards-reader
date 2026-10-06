@@ -104,11 +104,23 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
 
     await cdp.viewport(390, 844);
     await cdp.file(ordinary);
+    await cdp.evaluate(`(() => { const block = [...document.querySelectorAll('#reader-content .block')].find(node => node.textContent.includes('Reader preserves')); block.click(); const word = [...block.querySelectorAll('.word')].find(node => node.textContent === 'Reader'); const range = document.createRange(); range.selectNodeContents(word); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); })()`);
+    await until(() => cdp.evaluate(`!document.querySelector('#define-button').hidden`));
+    await cdp.evaluate(`document.querySelector('#define-button').click()`);
+    await until(() => cdp.evaluate(`!document.querySelector('#dictionary-panel').hidden && document.querySelector('#dictionary-headword').textContent === 'reader'`));
+    assert.ok(await cdp.evaluate(`!!document.querySelector('.source-highlight')`), 'DICT-003: definition does not clear the source anchor');
+    await cdp.evaluate(`document.querySelector('#dictionary-close').click()`);
     await cdp.evaluate(`document.querySelector('#mobile-menu-button').click()`);
     assert.ok(await cdp.evaluate(`!document.querySelector('#mobile-menu').hidden && document.querySelector('#mobile-menu-button').getAttribute('aria-expanded') === 'true'`), 'MOBILE-010: top menu opens');
     await cdp.evaluate(`document.querySelector('#mobile-menu-settings').click()`);
     assert.ok(await cdp.evaluate(`document.querySelector('#mobile-menu').hidden && !document.querySelector('#settings-panel').hidden && !!document.querySelector('#font-family') && !!document.querySelector('#background-color') && !!document.querySelector('#ruler-mode') && !!document.querySelector('#citation-view') && !!document.querySelector('#saved-profiles') && !!document.querySelector('#mobile-voice-select')`), 'MOBILE-010: menu opens the full reading settings sheet');
     await cdp.evaluate(`document.querySelector('#settings-close').click()`);
+    await cdp.evaluate(`document.querySelector('#reader-scroll').scrollTop = 100; document.querySelector('#mobile-menu-button').click(); document.querySelector('#mobile-menu-focus').click()`);
+    assert.ok(await cdp.evaluate(`document.body.classList.contains('focus-mode') && document.querySelector('#focus-exit').getBoundingClientRect().width >= 44`), 'FOCUS-001: phone focus mode leaves a visible exit');
+    const focusTop = await cdp.evaluate(`document.querySelector('#reader-scroll').scrollTop`);
+    await cdp.evaluate(`document.querySelector('#focus-exit').click()`);
+    assert.ok(await cdp.evaluate(`!document.body.classList.contains('focus-mode') && Math.abs(document.querySelector('#reader-scroll').scrollTop - ${focusTop}) < 2`), 'FOCUS-001: exit preserves reading position');
+    assert.match(await cdp.evaluate(`document.querySelector('#reading-progress').textContent`), /\d+% · p\. 1\/1/, 'PROGRESS-001: logical progress and page are visible');
     if (process.env.READER_TEST_SCREENSHOT) {
       const { data } = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       await writeFile(process.env.READER_TEST_SCREENSHOT, Buffer.from(data, 'base64'));

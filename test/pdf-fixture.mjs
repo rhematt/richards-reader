@@ -97,3 +97,17 @@ export const v2MixedBandsPdf = () => pdfFixture([
   ...Array.from({ length: 4 }, (_, i) => ({ x: 50, y: 520 - i * 25, text: `After left ${i + 1}.` })),
   ...Array.from({ length: 4 }, (_, i) => ({ x: 325, y: 520 - i * 25, text: `After right ${i + 1}.` }))
 ]);
+
+export const v2HierarchyPdf = () => pdfFixture([
+  { x: 50, y: 782, text: 'Journal of Synthetic Examples', size: 9 },
+  { x: 50, y: 747, text: 'A Study of Clear Structure', size: 22 },
+  { x: 50, y: 704, text: '1 Methods', size: 17 },
+  { x: 50, y: 669, text: 'Methods prose remains body text.' },
+  { x: 50, y: 632, text: '1.1 Participants', size: 15 },
+  { x: 50, y: 596, text: 'Participant prose remains body text.' },
+  { x: 50, y: 559, text: '1.1.1 Eligibility', size: 15 },
+  { x: 50, y: 523, text: 'Eligibility prose remains body text.' },
+  { x: 50, y: 485, text: '2 Results', size: 17 },
+  { x: 50, y: 449, text: 'Results prose remains body text.' },
+  { x: 300, y: 20, text: '1', size: 9 }
+]);

@@ -1,5 +1,8 @@
 import './style.css';
 import { openPdf, citationsIn, speechText } from './model.js';
+import { buildOutline, flattenOutline } from './layout/outline.js';
+import { PROFILE_SETTING_IDS, exportProfile, importProfile } from './profile.js';
+import { defineWord } from './dictionary/index.js';
 
 const $ = id => document.getElementById(id);
 const sourceScroll = $('source-scroll');
@@ -9,7 +12,7 @@ const readerContent = $('reader-content');
 const speech = window.speechSynthesis;
 const mobileMedia = window.matchMedia('(max-width: 700px), (max-width: 950px) and (max-height: 500px)');
 const isMobile = () => mobileMedia.matches;
-const settingsIds = ['font-family', 'font-size', 'line-height', 'letter-spacing', 'word-spacing', 'paragraph-spacing', 'text-width', 'font-weight', 'text-align', 'preset', 'background-color', 'text-color', 'ruler-color', 'highlight-color', 'dim-level', 'ruler-mode', 'ruler-size', 'ruler-opacity', 'speech-follow-ruler', 'footnote-view', 'endnote-view', 'citation-view', 'reference-view', 'show-furniture', 'speak-citations', 'speak-footnotes', 'speak-endnotes', 'speak-references', 'speak-furniture'];
+const settingsIds = PROFILE_SETTING_IDS;
 const presets = {
   paper: { 'background-color': '#fffdf8', 'text-color': '#26312e', 'ruler-color': '#f5d366', 'highlight-color': '#ffe18a' },
   dark: { 'background-color': '#182321', 'text-color': '#edf3eb', 'ruler-color': '#577e80', 'highlight-color': '#5c6846' },
@@ -23,6 +26,7 @@ const state = {
   lastManualSource: 0, lastManualReader: 0, lastProgrammatic: 0, rulerY: null,
   generation: 0, fetchController: null, mobileReaderPosition: 0
 };
+let selectedDefinitionWord = '';
 
 function toast(message, duration = 4500) {
   $('toast').textContent = message;
@@ -112,6 +116,7 @@ async function closeDocument() {
   sourceContent.classList.remove('has-pages');
   readerContent.replaceChildren(empty('Read with context', 'Reflowed content stays linked to the authoritative original.'));
   $('heading-select').replaceChildren(new Option('Headings', ''));
+  $('reading-progress').textContent = '0% · p. —/—';
   $('bookmark-list').textContent = 'None yet. Bookmarks and notes are cleared when the document closes.';
   $('close-button').disabled = true;
   $('page-indicator').textContent = 'Page — / —';
@@ -182,6 +187,7 @@ async function openPdfBytes(bytes, generation) {
   renderAccessible();
   refreshHeadings();
   updatePageIndicator();
+  updateReadingProgress();
   if (!model.usableText) toast('No usable text layer detected. Local OCR support is not yet enabled.', 10000);
   const saved = state.docKey && Number(localStorage.getItem(state.docKey));
   if (saved > 1 && saved <= model.pages.length) setTimeout(() => navigatePage(saved), 200);
@@ -200,7 +206,7 @@ async function openWebsite(html, url) {
   sourceContent.replaceChildren(notice);
   const link = document.createElement('a'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open original site in a new tab'; sourceContent.append(link);
   const frame = document.createElement('iframe'); frame.src = url; frame.title = 'Original website'; frame.referrerPolicy = 'no-referrer'; frame.className = 'website-frame'; sourceContent.append(frame);
-  renderAccessible(); refreshHeadings(); updatePageIndicator(); $('close-button').disabled = false;
+  renderAccessible(); refreshHeadings(); updatePageIndicator(); updateReadingProgress(); $('close-button').disabled = false;
   if (!blocks.length) toast('This site returned no readable content. Its security rules or page structure may prevent extraction.', 8000);
   else toast('Website text extracted in this browser. Cross-origin source coordinates are unavailable.', 6000);
 }
@@ -290,7 +296,7 @@ function renderAccessible() {
     readerContent.append(marker);
     for (const block of page.blocks) {
       if (!isVisible(block)) continue;
-      const element = document.createElement(block.type === 'heading' ? `h${block.level || 2}` : 'div');
+      const element = document.createElement(block.type === 'title' ? 'h1' : block.type === 'heading' ? `h${Math.min(6, (block.level || 1) + 1)}` : 'div');
       element.className = 'block'; element.dataset.id = block.id; element.dataset.type = block.type; element.tabIndex = 0;
       if (['footnote', 'endnote', 'bibliography'].includes(block.section || block.type) && setting({ footnote: 'footnote-view', endnote: 'endnote-view', bibliography: 'reference-view' }[block.section || block.type]) === 'collapse') {
         const button = document.createElement('button'); button.className = 'collapsed-note'; button.textContent = `Show ${block.section || block.type} from page ${block.page}`;
@@ -325,6 +331,7 @@ function renderAccessible() {
     }
   }
   state.speechItems = collectSpeechItems();
+  updateReadingProgress();
   $('speak-button').disabled = !state.localVoices.length || !state.speechItems.length;
   if (!state.speechItems.length) $('speech-status').textContent = 'No readable text for speech';
   else if (state.localVoices.length) $('speech-status').textContent = 'Device voice · no cloud TTS';
@@ -390,7 +397,10 @@ function collectSpeechItems() {
 }
 function refreshHeadings() {
   const select = $('heading-select'); select.replaceChildren(new Option('Headings', ''));
-  for (const block of state.model.pages.flatMap(page => page.blocks).filter(b => b.type === 'heading')) select.add(new Option(`${block.text.slice(0, 55)} · p.${block.page}`, block.id));
+  for (const node of flattenOutline(buildOutline(state.model.pages))) {
+    const indent = '\u00a0\u00a0'.repeat(node.level - 1);
+    select.add(new Option(`${indent}${node.text.slice(0, 55)} · p.${node.page}`, node.id));
+  }
 }
 
 function focusBlock(block, from = 'reader', gentle = false) {
@@ -403,6 +413,7 @@ function focusBlock(block, from = 'reader', gentle = false) {
   if (!state.model.website) focusSource(block, gentle);
   state.currentPage = block.page;
   updatePageIndicator();
+  updateReadingProgress(block);
   if (state.docKey) localStorage.setItem(state.docKey, String(block.page));
 }
 function focusSource(block, gentle = false) {
@@ -461,15 +472,71 @@ function openSettings() {
   $('settings-button').setAttribute('aria-expanded', 'true');
   $('mobile-settings-button').setAttribute('aria-expanded', 'true');
 }
+function setFocusMode(enabled) {
+  if (document.body.classList.contains('focus-mode') === enabled) return;
+  closeMobileMenu(); closeSettings(); closeMobileOriginal();
+  const top = readerScroll.scrollTop;
+  document.body.classList.toggle('focus-mode', enabled);
+  $('focus-exit').hidden = !enabled;
+  requestAnimationFrame(() => { readerScroll.scrollTop = top; updateRuler(); updateReadingProgress(); });
+}
 function closeSettings() {
   $('settings-panel').hidden = true;
   $('settings-button').setAttribute('aria-expanded', 'false');
   $('mobile-settings-button').setAttribute('aria-expanded', 'false');
 }
+function updateDefinitionAction() {
+  const selection = window.getSelection();
+  const word = selection?.toString().trim();
+  const node = selection?.anchorNode;
+  if (!word || !/^[\p{L}]{2,24}$/u.test(word) || !node || !readerContent.contains(node)) {
+    $('define-button').hidden = true;
+    return;
+  }
+  selectedDefinitionWord = word;
+  const rect = selection.getRangeAt(0).getBoundingClientRect();
+  const button = $('define-button');
+  button.style.left = `${Math.min(innerWidth - 90, Math.max(8, rect.left))}px`;
+  button.style.top = `${Math.min(innerHeight - 55, Math.max(8, rect.bottom + 5))}px`;
+  button.hidden = false;
+}
+async function showDefinition() {
+  $('define-button').hidden = true;
+  const panel = $('dictionary-panel');
+  const result = $('dictionary-result');
+  panel.hidden = false;
+  $('dictionary-headword').textContent = selectedDefinitionWord.toLocaleLowerCase('en');
+  result.textContent = 'Looking up the local dictionary…';
+  try {
+    const entry = await defineWord(selectedDefinitionWord);
+    result.replaceChildren();
+    if (!entry) { result.textContent = 'No local definition is available for this word.'; return; }
+    $('dictionary-headword').textContent = entry.headword;
+    for (const sense of entry.senses) {
+      const p = document.createElement('p');
+      const part = document.createElement('b'); part.textContent = `${sense.partOfSpeech} · `;
+      p.append(part, document.createTextNode(sense.definition)); result.append(p);
+    }
+  } catch { result.textContent = 'The local dictionary is unavailable on this device.'; }
+}
 function updatePageIndicator() {
   const label = `Page ${state.currentPage} / ${state.model?.pages.length || '—'}`;
   $('page-indicator').textContent = label;
   $('mobile-page-indicator').textContent = label;
+}
+function updateReadingProgress(active = null) {
+  if (!state.model) return;
+  const blocks = state.model.pages.flatMap(page => page.blocks).filter(block => isVisible(block) && !['header', 'footer', 'page_number'].includes(block.type));
+  const block = active || currentReadingBlock() || blocks[0];
+  const index = Math.max(0, blocks.findIndex(item => item.id === block?.id));
+  const percent = blocks.length < 2 ? (blocks.length ? 100 : 0) : Math.round(index / (blocks.length - 1) * 100);
+  const headings = [];
+  for (const item of blocks.slice(0, index + 1)) if (item.type === 'heading') {
+    headings.length = Math.max(0, (item.level || 1) - 1);
+    headings.push(item.text);
+  }
+  const location = headings.slice(-2).join(' › ');
+  $('reading-progress').textContent = `${percent}% · p. ${block?.page || state.currentPage}/${state.model.pages.length}${location ? ` · ${location}` : ''}`;
 }
 function navigatePage(number) {
   if (!state.model) return;
@@ -609,6 +676,7 @@ function setupEvents() {
   $('mobile-original-button').addEventListener('click', () => openMobileOriginal());
   $('mobile-menu-button').addEventListener('click', toggleMobileMenu);
   $('mobile-menu-settings').addEventListener('click', openSettings);
+  $('mobile-menu-focus').addEventListener('click', () => setFocusMode(true));
   $('mobile-original-close').addEventListener('click', () => closeMobileOriginal());
   $('search-input').addEventListener('input', () => { state.matchIndex = -1; updateSearch(); });
   $('search-previous').addEventListener('click', () => moveSearch(-1));
@@ -617,6 +685,11 @@ function setupEvents() {
   $('heading-select').addEventListener('change', event => { const block = state.model?.pages.flatMap(page => page.blocks).find(b => b.id === event.target.value); if (block) focusBlock(block, 'source'); });
   $('maximize-source').addEventListener('click', () => { const maximised = document.body.classList.toggle('source-maximised'); document.documentElement.style.setProperty('--source-width', maximised ? 'calc(100% - 8px)' : '50%'); $('maximize-source').textContent = maximised ? 'Restore panes' : 'Maximise original'; });
   $('settings-button').addEventListener('click', openSettings);
+  $('focus-button').addEventListener('click', () => setFocusMode(true));
+  $('focus-exit').addEventListener('click', () => setFocusMode(false));
+  $('define-button').addEventListener('click', showDefinition);
+  $('dictionary-close').addEventListener('click', () => { $('dictionary-panel').hidden = true; });
+  document.addEventListener('selectionchange', updateDefinitionAction);
   $('mobile-settings-button').addEventListener('click', openSettings);
   $('settings-close').addEventListener('click', closeSettings);
   $('preset').addEventListener('change', event => { if (presets[event.target.value]) restoreSettings({ ...settingSnapshot(), ...presets[event.target.value] }); });
@@ -626,6 +699,20 @@ function setupEvents() {
     const name = event.target.value;
     const profile = loadProfiles()[name];
     if (profile) { $('saved-profiles').value = name; restoreSettings(profile); }
+  });
+  $('export-profile').addEventListener('click', () => {
+    const blob = new Blob([exportProfile(settingSnapshot())], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = 'reader-profile.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  $('import-profile-file').addEventListener('change', async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try { restoreSettings(importProfile(await file.text())); toast('Reading profile imported.'); }
+    catch { toast('Could not import this profile.'); }
+    event.target.value = '';
   });
   $('bookmark-button').addEventListener('click', addBookmark);
   $('speak-button').addEventListener('click', toggleSpeech);
@@ -654,14 +741,14 @@ function setupEvents() {
   for (const eventName of ['wheel', 'touchstart', 'pointerdown']) { sourceScroll.addEventListener(eventName, () => state.lastManualSource = Date.now(), { passive: true }); readerScroll.addEventListener(eventName, () => state.lastManualReader = Date.now(), { passive: true }); }
   let sourceTimer, readerTimer;
   sourceScroll.addEventListener('scroll', () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => syncFromSource(), 180); });
-  readerScroll.addEventListener('scroll', () => { clearTimeout(readerTimer); readerTimer = setTimeout(() => syncFromReader(), 180); updateRuler(); });
+  readerScroll.addEventListener('scroll', () => { clearTimeout(readerTimer); readerTimer = setTimeout(() => syncFromReader(), 180); updateRuler(); updateReadingProgress(); });
   mobileMedia.addEventListener('change', () => {
     if (!isMobile()) closeMobileOriginal();
     if (state.model) renderAccessible();
     updateRuler();
   });
   window.addEventListener('resize', updateRuler);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMobileOriginal(); closeSettings(); closeMobileMenu(); } });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { setFocusMode(false); closeMobileOriginal(); closeSettings(); closeMobileMenu(); } });
 }
 function changeZoom(delta) {
   if (!state.model || state.model.website) return;
