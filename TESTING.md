@@ -44,10 +44,12 @@ laptop should receive application GET/HEAD requests only, with no PDF request
 body or document-derived content. The static server has no upload route and
 rejects other methods with 405.
 
-**Real-device result: Pending.** Record iPadOS version, browser versions,
-document categories, source tracking, TTS and server request inspection here
-after the checks are performed. GitHub publication remains blocked until both
-iPad browsers pass.
+**Real-device result: Partial.** On 6 Oct 2026, the user reported that the
+updated LAN build “works now” after the local-PDF iPad check. The exact
+browser-by-browser steps and coverage of two-column, figure and table PDFs
+have not yet been confirmed. Record iPadOS/browser versions, source tracking,
+TTS and server request inspection when available. GitHub publication remains
+blocked until the full iPad Safari and Edge matrix is confirmed.
 
 Use `npm ci`, `npm run build`, and `npm start`. Test with synthetic files from
 `scripts/generate-fixtures.py` or public documents only. Never add private
