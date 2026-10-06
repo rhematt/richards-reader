@@ -15,6 +15,7 @@ button:hover, .button:hover { background: #e9f1ec; }
 button:focus-visible, input:focus-visible, select:focus-visible, .block:focus-visible, .pane-divider:focus-visible { outline: 3px solid #376c94; outline-offset: 2px; }
 button:disabled { opacity: .45; cursor: default; }
 .mobile-only { display: none; }
+.mobile-menu[hidden] { display: none; }
 .primary { background: #174e3f; color: white; border-color: #174e3f; }
 .primary:hover { background: #266c58; color: white; }
 input:not([type='checkbox']):not([type='color']), select { min-height: 2.2rem; border: 1px solid #becac3; border-radius: 7px; background: white; color: #24312d; padding: .35rem .5rem; }
@@ -119,12 +120,14 @@ fieldset label input[type='checkbox'] { margin-left: auto; }
 @media (max-width: 960px) { .topbar { flex-wrap: wrap; gap: .4rem; } .brand { min-width: auto; } .open-actions { order: 3; flex-basis: 100%; } .privacy-status { margin-left: auto; } .source-pane { flex-basis: var(--source-width, 48%); } .source-content { padding: .7rem; } .reader-content { padding: 1.2rem .9rem 4rem; } .pane-header span { display: none; } .speechbar select { margin-left: 0; } }
 @media (max-width: 700px), (max-width: 950px) and (max-height: 500px) {
   .mobile-only { display: initial; }
-  .topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .5rem; min-height: 0; padding: .35rem .65rem; padding-top: max(.35rem, env(safe-area-inset-top)); }
+  .topbar { display: grid; position: relative; grid-template-columns: minmax(0, 1fr) auto auto; gap: .35rem .5rem; min-height: 0; padding: .35rem .65rem; padding-top: max(.35rem, env(safe-area-inset-top)); }
   .brand { min-width: 0; }
   .brand-mark { width: 2rem; height: 2rem; font-size: 1.2rem; }
   .brand strong { font-size: 1rem; }
   .brand small { display: none; }
-  #mobile-original-button { min-height: 44px; }
+  #mobile-original-button, #mobile-menu-button { min-height: 44px; }
+  .mobile-menu { position: absolute; z-index: 12; right: .65rem; top: calc(100% - .2rem); min-width: 12rem; padding: .35rem; background: #fff; border: 1px solid #b9c8c0; border-radius: 9px; box-shadow: 0 6px 20px #17271f44; }
+  .mobile-menu button { display: block; width: 100%; min-height: 44px; text-align: left; }
   .open-actions { order: initial; grid-column: 1 / -1; display: flex; flex-wrap: wrap; flex-basis: auto; width: 100%; }
   .open-actions > .button, .open-actions > button { min-height: 44px; display: inline-flex; align-items: center; }
   #url-form { order: 3; flex-basis: 100%; min-width: 0; }

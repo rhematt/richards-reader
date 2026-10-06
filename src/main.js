@@ -427,6 +427,7 @@ function currentReadingBlock() {
 function openMobileOriginal(block = null) {
   if (!isMobile() || !state.model) return;
   state.mobileReaderPosition = readerScroll.scrollTop;
+  closeMobileMenu();
   closeSettings();
   document.body.classList.add('mobile-original-open');
   $('mobile-original-button').setAttribute('aria-expanded', 'true');
@@ -445,7 +446,17 @@ function closeMobileOriginal({ restore = true } = {}) {
   }
   updateRuler();
 }
+function closeMobileMenu() {
+  $('mobile-menu').hidden = true;
+  $('mobile-menu-button').setAttribute('aria-expanded', 'false');
+}
+function toggleMobileMenu() {
+  const open = $('mobile-menu').hidden;
+  $('mobile-menu').hidden = !open;
+  $('mobile-menu-button').setAttribute('aria-expanded', String(open));
+}
 function openSettings() {
+  closeMobileMenu();
   $('settings-panel').hidden = false;
   $('settings-button').setAttribute('aria-expanded', 'true');
   $('mobile-settings-button').setAttribute('aria-expanded', 'true');
@@ -596,6 +607,8 @@ function setupEvents() {
   $('mobile-zoom-out').addEventListener('click', () => changeZoom(-.15));
   $('mobile-zoom-in').addEventListener('click', () => changeZoom(.15));
   $('mobile-original-button').addEventListener('click', () => openMobileOriginal());
+  $('mobile-menu-button').addEventListener('click', toggleMobileMenu);
+  $('mobile-menu-settings').addEventListener('click', openSettings);
   $('mobile-original-close').addEventListener('click', () => closeMobileOriginal());
   $('search-input').addEventListener('input', () => { state.matchIndex = -1; updateSearch(); });
   $('search-previous').addEventListener('click', () => moveSearch(-1));
@@ -648,7 +661,7 @@ function setupEvents() {
     updateRuler();
   });
   window.addEventListener('resize', updateRuler);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMobileOriginal(); closeSettings(); } });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMobileOriginal(); closeSettings(); closeMobileMenu(); } });
 }
 function changeZoom(delta) {
   if (!state.model || state.model.website) return;

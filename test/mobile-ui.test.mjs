@@ -62,7 +62,7 @@ class DevTools {
   }
 }
 
-test('MOBILE-001..009: phone surfaces, source drawer, ruler and tablet regression', { timeout: 120000, skip: !existsSync(edge) && 'Set READER_TEST_BROWSER to an installed Chromium/Edge executable' }, async () => {
+test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet regression', { timeout: 120000, skip: !existsSync(edge) && 'Set READER_TEST_BROWSER to an installed Chromium/Edge executable' }, async () => {
   const temp = await mkdtemp(join(tmpdir(), 'reader-mobile-test-'));
   const ordinary = join(temp, 'ordinary.pdf');
   const complex = join(temp, 'complex.pdf');
@@ -91,19 +91,24 @@ test('MOBILE-001..009: phone surfaces, source drawer, ruler and tablet regressio
         const source = document.querySelector('#source-pane').getBoundingClientRect();
         const visible = id => { const node = document.getElementById(id); return !!node && getComputedStyle(node).display !== 'none' && node.getBoundingClientRect().width > 0; };
         return { readerWidth: reader.width, sourceWidth: source.width, appWidth: document.documentElement.scrollWidth, viewportWidth: innerWidth,
-          original: visible('mobile-original-button'), settings: visible('mobile-settings-button'), play: visible('speak-button'),
+          original: visible('mobile-original-button'), menu: visible('mobile-menu-button'), settings: visible('mobile-settings-button'), play: visible('speak-button'),
           previous: visible('previous-sentence'), next: visible('next-sentence'), speed: visible('speech-rate'), search: visible('search-input'),
-          touchHeights: ['mobile-original-button','mobile-settings-button','speak-button','previous-sentence','next-sentence','speech-rate','search-input','heading-select'].map(id => document.getElementById(id).getBoundingClientRect().height) };
+          touchHeights: ['mobile-original-button','mobile-menu-button','mobile-settings-button','speak-button','previous-sentence','next-sentence','speech-rate','search-input','heading-select'].map(id => document.getElementById(id)?.getBoundingClientRect().height || 0) };
       })()`);
       assert.ok(layout.readerWidth >= width - 2, `${width}×${height}: reading pane fills the phone`);
       assert.ok(layout.sourceWidth === 0, `${width}×${height}: no permanent original pane`);
       assert.ok(layout.appWidth <= layout.viewportWidth + 1, `${width}×${height}: no application horizontal scroll`);
-      for (const key of ['original', 'settings', 'play', 'previous', 'next', 'speed', 'search']) assert.ok(layout[key], `${width}×${height}: ${key} is available`);
+      for (const key of ['original', 'menu', 'settings', 'play', 'previous', 'next', 'speed', 'search']) assert.ok(layout[key], `${width}×${height}: ${key} is available`);
       assert.ok(layout.touchHeights.every(height => height >= 43), `${width}×${height}: primary controls are at least 44 CSS pixels high`);
     }
 
     await cdp.viewport(390, 844);
     await cdp.file(ordinary);
+    await cdp.evaluate(`document.querySelector('#mobile-menu-button').click()`);
+    assert.ok(await cdp.evaluate(`!document.querySelector('#mobile-menu').hidden && document.querySelector('#mobile-menu-button').getAttribute('aria-expanded') === 'true'`), 'MOBILE-010: top menu opens');
+    await cdp.evaluate(`document.querySelector('#mobile-menu-settings').click()`);
+    assert.ok(await cdp.evaluate(`document.querySelector('#mobile-menu').hidden && !document.querySelector('#settings-panel').hidden && !!document.querySelector('#font-family') && !!document.querySelector('#background-color') && !!document.querySelector('#ruler-mode') && !!document.querySelector('#citation-view') && !!document.querySelector('#saved-profiles') && !!document.querySelector('#mobile-voice-select')`), 'MOBILE-010: menu opens the full reading settings sheet');
+    await cdp.evaluate(`document.querySelector('#settings-close').click()`);
     if (process.env.READER_TEST_SCREENSHOT) {
       const { data } = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       await writeFile(process.env.READER_TEST_SCREENSHOT, Buffer.from(data, 'base64'));

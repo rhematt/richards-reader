@@ -20,6 +20,7 @@ before calling the mobile interface fully verified.
 | MOBILE-007 Settings | Settings open in a touch-sized sheet without occupying reading width; saved profiles still apply. | `test/mobile-ui.test.mjs`: settings sheet visibility. | Change a profile on iPhone. |
 | MOBILE-008 Landscape | Phone landscape keeps the mobile interaction model and has no horizontal application scroll. | `test/mobile-ui.test.mjs`: both landscape sizes. | Rotate an iPhone while reading. |
 | MOBILE-009 Regression protection | Desktop and iPad remain dual-pane. PDF coordinates, columns, figures, tables, filters, local TTS, privacy, Bonjour/Caddy and existing tests remain intact. | Existing PDF, model and launcher suites plus `test/mobile-ui.test.mjs` tablet/desktop geometry. | Repeat iPad Safari/Edge and desktop spot checks. |
+| MOBILE-010 Mobile options access | A labelled menu button stays visible at the top in phone portrait and landscape. Its Reading settings action opens the full settings sheet, including typography, colours, focus, filters, profiles and local voice. The menu and sheet can be closed without losing reading position. | `test/mobile-ui.test.mjs`: top menu visibility, touch target and settings access. | Open the menu and change a reading setting on the actual phone. |
 
 **Automated result, 6 Oct 2026:** Passed in headless Edge at 390×844 and
 430×932 portrait, 844×390 and 932×430 landscape, 768×1024 tablet, and
@@ -39,6 +40,17 @@ source drawer and device TTS are pending. The post-change iPad Safari/Edge
 regression check is also pending. Emulation and prior iPad results do not
 establish these new real-device passes. Record device/browser versions and
 results here after testing.
+
+**Reported defect after the first mobile build:** On the actual mobile view,
+the options buttons were not discoverable and the user could not reach reading
+customisation. MOBILE-010 was added before the menu fix. A visible top-bar
+menu and actual phone verification are required; the earlier automated
+bottom-bar visibility assertion did not catch this usability failure.
+
+**MOBILE-010 correction, 6 Oct 2026:** A labelled, 44-pixel top-bar Options
+button now opens Reading settings without moving the reading position. The
+expanded menu and settings sheet passed the development and production-CSP
+browser suites (9/9 each). Actual iPhone verification remains pending.
 
 ## LAN-MDNS-001 — Dynamic `reader.local` registration
 
