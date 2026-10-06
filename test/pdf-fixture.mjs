@@ -61,3 +61,30 @@ export const figureAndTablePdf = () => pdfFixture([
     ['Difference', '0', '6']
   ].flatMap((row, i) => row.map((text, j) => ({ x: [55, 240, 390][j], y: 305 - i * 24, text })))
 ], { image: true });
+
+// V2-STRUCT-001 combines source-owned text, page furniture and prose. The
+// raster image occupies PDF coordinates x=60..220, y=400..500; its labels
+// must remain inside the figure instead of entering the reading stream.
+export const v2CompositePdf = () => pdfFixture([
+  { x: 50, y: 782, text: 'SYNTHETIC JOURNAL HEADER', size: 9 },
+  { x: 50, y: 748, text: 'Source-Faithful Reading', size: 22 },
+  { x: 50, y: 711, text: '1 Introduction', size: 17 },
+  { x: 50, y: 677, text: 'The opening paragraph introduces the comparison.' },
+  { x: 50, y: 652, text: 'A second paragraph leads into the graphic.' },
+  { x: 78, y: 463, text: 'Accuracy', size: 9 },
+  { x: 90, y: 435, text: 'Control', size: 9 },
+  { x: 153, y: 435, text: '0.6', size: 9 },
+  { x: 50, y: 375, text: 'Figure 1. A source graph with internal labels.' },
+  { x: 50, y: 338, text: 'The discussion resumes after the figure.' },
+  ...[
+    ['Condition', 'Before', 'After'],
+    ['Control', '12', '13'],
+    ['Treatment', '12', '19']
+  ].flatMap((row, i) => row.map((text, j) => ({ x: [55, 245, 395][j], y: 297 - i * 23, text }))),
+  { x: 50, y: 205, text: 'Table 1. Synthetic measurements.' },
+  { x: 50, y: 171, text: 'The next paragraph introduces an equation.' },
+  { x: 170, y: 137, text: 'E = m c 2', size: 15 },
+  { x: 482, y: 137, text: '(4)', size: 12 },
+  { x: 50, y: 103, text: 'The closing paragraph follows the equation.' },
+  { x: 298, y: 20, text: '1', size: 9 }
+], { image: true });
