@@ -44,12 +44,14 @@ laptop should receive application GET/HEAD requests only, with no PDF request
 body or document-derived content. The static server has no upload route and
 rejects other methods with 405.
 
-**Real-device result: Partial.** On 6 Oct 2026, the user reported that the
-updated LAN build “works now” after the local-PDF iPad check. The exact
-browser-by-browser steps and coverage of two-column, figure and table PDFs
-have not yet been confirmed. Record iPadOS/browser versions, source tracking,
-TTS and server request inspection when available. GitHub publication remains
-blocked until the full iPad Safari and Edge matrix is confirmed.
+**Real-device result: Passed, user-confirmed on 6 Oct 2026.** On the actual
+iPad, both Safari and Edge completed original rendering, text extraction,
+accessible reflow, source highlighting and device TTS without the reported
+runtime error. The user opened ordinary, two-column, figure-containing and
+table-containing PDFs in both browsers. iPadOS and browser version numbers
+were not supplied. A device network trace was not captured; the no-upload
+property is covered by the automated zero-fetch check, local-mode CSP, and
+the server's GET/HEAD-only design.
 
 Use `npm ci`, `npm run build`, and `npm start`. Test with synthetic files from
 `scripts/generate-fixtures.py` or public documents only. Never add private
@@ -71,9 +73,9 @@ documents to the repository.
 | Direct public PDF URL | Browser fetch, no laptop proxy | Passed with Mozilla's public PDF.js sample PDF |
 | Browser security failure | Clear CORS/framing explanation | CORS failure passed with `example.com`; a CORS-permitted W3C page extracted, while its framing policy blocks the embedded original |
 | Local privacy boundary | No app network connections in local mode; no POST endpoint | Production CSP verified as `connect-src 'none'`; synthetic POST returned 405 and nonexistent document GET route returned 404 |
-| LAN address | App responds on laptop LAN IP and port | Passed from the laptop using its LAN IP; a second device was not available |
-| iPad-size layout | Both panes, settings, and controls remain usable | Checked in desktop browser at 1024×768 and 820×1180; this is not an iPad Safari test |
-| iPad Safari over LAN | Open file from iPad, sync both panes, local voice and touch ruler | **Pending actual iPad access** |
+| LAN address | App responds on laptop LAN IP and port | Passed from the laptop and actual iPad over the LAN |
+| iPad-size layout | Both panes, settings, and controls remain usable | Both reading panes and source tracking passed on an actual iPad; settings and touch ruler were not specifically retested for this defect |
+| iPad Safari and Edge over LAN | Open local PDFs, render/reflow, source sync and local TTS | **Passed on the actual iPad in both browsers** for ordinary, two-column, figure and table PDFs; user-confirmed |
 | Desktop Safari/Chrome/Edge | Same PDF checks in each target browser | macOS Safari and Edge (Chromium) passed ordinary, two-column, and figure/table PDF checks after the compatibility change; separate Chrome brand check pending |
 | Dependency security | No reported high-severity advisories | `npm audit --audit-level=high` passed after upgrading PDF.js to 6.4.299 |
 | Document close | PDF worker, rendered pages, and extracted blocks are released | Passed in desktop browser; a second PDF opened successfully afterward |
