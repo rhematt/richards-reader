@@ -1,5 +1,31 @@
 # Reader V1 test checklist
 
+## Mobile UI acceptance — `mobile-ui` branch
+
+The phone presentation uses the existing PDF model, source anchors, reading
+stream, settings and privacy boundary. Test at 390×844 and 430×932 portrait,
+and at 844×390 and 932×430 landscape. Also check 768×1024 iPad portrait and
+desktop widths to protect the existing dual-pane layout. Automated viewport
+checks cover layout and interactions; an actual iPhone Safari run is required
+before calling the mobile interface fully verified.
+
+| Requirement | Acceptance check | Automated coverage | Real-device check |
+| --- | --- | --- | --- |
+| MOBILE-001 No compressed desktop layout | Phone viewports show one full-width reading pane, touch-sized controls and no application-level horizontal scroll or hover-only action. | `test/mobile-ui.test.mjs`: phone geometry and visible controls. | iPhone portrait and landscape. |
+| MOBILE-002 Primary reading view | Accessible content opens as the default surface; typography, colours, filters, ruler, anchors, search, TTS and sentence navigation remain reachable. | `test/mobile-ui.test.mjs`: default surface and controls. | Open a text PDF and use each control. |
+| MOBILE-003 Original PDF drawer | Original opens from an obvious control at the current reading anchor, shows its source box, supports page/zoom inspection, and closes to the same reading position. | `test/mobile-ui.test.mjs`: drawer state, anchor and preserved scroll position. | Inspect a selected paragraph on iPhone. |
+| MOBILE-004 Touch ruler | Ruler is a viewport overlay; document scrolling leaves it fixed. Only its grip drags it. Grip dragging does not scroll the document; settings still change size and opacity. | `test/mobile-ui.test.mjs`: grip drag and document scroll. | Finger drag grip, then scroll prose. |
+| MOBILE-005 TTS integration | Compact bar keeps play/pause, previous/next sentence and speed available; verified local voice selection and highlighting remain. Speech can follow the ruler. | Existing speech logic plus `test/mobile-ui.test.mjs` control checks. | Speak and navigate sentences on iPhone. |
+| MOBILE-006 Source-linked structures | Tapping a table, figure or equation source link opens the original at its bounding box and returns to the previous reading position. | `test/mobile-ui.test.mjs`: source-link action. | Use a figure/table PDF on iPhone. |
+| MOBILE-007 Settings | Settings open in a touch-sized sheet without occupying reading width; saved profiles still apply. | `test/mobile-ui.test.mjs`: settings sheet visibility. | Change a profile on iPhone. |
+| MOBILE-008 Landscape | Phone landscape keeps the mobile interaction model and has no horizontal application scroll. | `test/mobile-ui.test.mjs`: both landscape sizes. | Rotate an iPhone while reading. |
+| MOBILE-009 Regression protection | Desktop and iPad remain dual-pane. PDF coordinates, columns, figures, tables, filters, local TTS, privacy, Bonjour/Caddy and existing tests remain intact. | Existing PDF, model and launcher suites plus `test/mobile-ui.test.mjs` tablet/desktop geometry. | Repeat iPad Safari/Edge and desktop spot checks. |
+
+**Status, 6 Oct 2026:** Requirements recorded before mobile implementation.
+Real-device iPhone Safari checks are pending. Record actual device/browser
+results here after testing; viewport emulation cannot establish a real-device
+pass.
+
 ## LAN-MDNS-001 — Dynamic `reader.local` registration
 
 Run `npm run build && npm start` on a macOS laptop with a default IPv4 LAN
