@@ -97,8 +97,10 @@ export function detectSourceRegions({ lines, imageBoxes, page, width, height, me
   }
 
   for (const line of available()) {
+    const rotatedMargin = line.runs.every(run => run.rotated) &&
+      (line.box.x < width * .08 || line.box.x + line.box.w > width * .92);
     const isNumber = line.box.y > height * .94 && /^\d{1,4}$/.test(line.text);
-    const type = isNumber ? 'page_number' :
+    const type = rotatedMargin ? 'header' : isNumber ? 'page_number' :
       line.box.y < height * .045 && line.fontSize <= medianSize * 1.2 ? 'header' :
       line.box.y > height * .94 && line.fontSize <= medianSize * 1.2 ? 'footer' : null;
     if (!type) continue;

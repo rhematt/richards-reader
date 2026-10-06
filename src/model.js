@@ -31,15 +31,24 @@ const headingLikeText = text => text.length < 100 &&
 function textRuns(content, viewport, page) {
   return content.items.filter(item => typeof item.str === 'string' && item.str.trim()).map((item, index) => {
     const t = pdfjs.Util.transform(viewport.transform, item.transform);
-    const height = Math.max(4, Math.hypot(t[2], t[3]));
-    const width = Math.max(1, item.width);
+    const fontSize = Math.max(4, Math.hypot(t[2], t[3]));
+    const advance = Math.max(1, item.width);
+    const baseline = Math.hypot(t[0], t[1]) || 1;
+    const cross = Math.hypot(t[2], t[3]) || 1;
+    const dx = advance * t[0] / baseline, dy = advance * t[1] / baseline;
+    const ox = fontSize * t[2] / cross, oy = fontSize * t[3] / cross;
+    const corners = [[0, 0], [dx, dy], [ox, oy], [dx + ox, dy + oy]];
+    const x = t[4] + Math.min(...corners.map(point => point[0]));
+    const y = t[5] + Math.min(...corners.map(point => point[1]));
     return {
       id: `p${page}-g${index}`,
       text: item.str,
-      x: t[4], y: t[5] - height,
-      w: width, h: height,
+      x, y,
+      w: Math.max(...corners.map(point => point[0])) - Math.min(...corners.map(point => point[0])),
+      h: Math.max(...corners.map(point => point[1])) - Math.min(...corners.map(point => point[1])),
       font: item.fontName,
-      fontSize: height,
+      fontSize,
+      rotated: Math.abs(t[1]) > Math.abs(t[0]) * .25,
       bold: /bold|black|heavy|semibold/i.test(item.fontName),
       eol: item.hasEOL
     };
@@ -72,7 +81,9 @@ export async function readTextContent(page) {
 function toLines(runs, pageWidth) {
   const lines = [];
   for (const run of [...runs].sort((a, b) => a.y - b.y || a.x - b.x)) {
-    const line = lines.find(l => Math.abs(l.y - run.y) <= Math.max(3, run.h * .36) && Math.abs(l.fontSize - run.fontSize) < run.h * .45);
+    const line = lines.find(l => l.runs[0].rotated === run.rotated &&
+      Math.abs(l.y - run.y) <= Math.max(3, run.fontSize * .36) &&
+      Math.abs(l.fontSize - run.fontSize) < run.fontSize * .45);
     if (line) line.runs.push(run);
     else lines.push({ y: run.y, fontSize: run.fontSize, runs: [run] });
   }
@@ -127,10 +138,13 @@ function makeTextBlocks(lines, page, pageWidth, pageHeight, medianSize) {
   let group = [];
   const flush = () => {
     if (!group.length) return;
-    const text = clean(group.map((line, index) => {
-      if (index && group[index - 1].text.endsWith('-') && /^[a-z]/.test(line.text)) return line.text;
-      return (index ? ' ' : '') + line.text;
-    }).join('').replace(/- (?=[a-z])/g, ''));
+    let joined = group[0].text;
+    for (let index = 1; index < group.length; index++) {
+      const line = group[index];
+      joined = group[index - 1].text.endsWith('-') && /^[a-z]/.test(line.text)
+        ? joined.slice(0, -1) + line.text : `${joined} ${line.text}`;
+    }
+    const text = clean(joined.replace(/- (?=[a-z])/g, ''));
     const box = union(group.map(l => l.box));
     const fontSize = median(group.map(l => l.fontSize));
     const block = { id: `p${page}-b${blocks.length}`, page, bbox: box, bounds: box, text, fontSize, bold: group.some(l => l.bold), type: 'body', confidence: 'heuristic', sourceObjectIds: group.flatMap(line => line.runs.map(run => run.id)), citations: [...text.matchAll(citationPattern)].map(match => ({ start: match.index, end: match.index + match[0].length, text: match[0], type: 'inline_citation' })) };
@@ -159,7 +173,11 @@ function makeTextBlocks(lines, page, pageWidth, pageHeight, medianSize) {
     const gap = previous ? line.box.y - (previous.box.y + previous.box.h) : 0;
     const sameColumn = previous && Math.abs(line.box.x - previous.box.x) < Math.max(18, medianSize * 2);
     const isShortDistinct = line.text.length < 80 && (line.bold || line.fontSize > medianSize * 1.18 || headingLikeText(line.text));
-    if (previous && (gap > Math.max(8, medianSize * .9) || gap < -medianSize || !sameColumn ||
+    const captionContinuation = previous && sameColumn &&
+      /^(?:fig(?:ure)?\.?|table)\s*\d+[.:\s]/i.test(group[0]?.text || '') &&
+      !/[.!?]$/.test(previous.text) && /^[a-z]/.test(line.text) &&
+      gap >= -medianSize && gap < medianSize * 1.8;
+    if (previous && !captionContinuation && (gap > Math.max(8, medianSize * .9) || gap < -medianSize || !sameColumn ||
       isShortDistinct || headingLikeText(previous.text) || /^table\s+\d+|^fig(?:ure)?\.?\s+\d+/i.test(line.text))) flush();
     group.push(line);
   }
@@ -255,10 +273,12 @@ async function buildPage(source, number, detections = [], cached = null) {
   const lines = cached?.lines || toLines(runs, viewport.width);
   // Tiny labels inside a figure or montage can outnumber the page's real
   // prose lines. Estimate body size from substantial lines first.
-  const substantialLines = lines.filter(line => line.box.w > viewport.width * .22);
+  const uprightLines = lines.filter(line => line.runs.every(run => !run.rotated));
+  const substantialLines = uprightLines.filter(line => line.box.w > viewport.width * .22);
+  const substantialSizes = substantialLines.map(line => line.fontSize).filter(size => size >= 6).sort((a, b) => a - b);
   const medianSize = cached?.medianSize ||
-    (substantialLines.length >= Math.max(5, lines.length * .25) ? median(substantialLines.map(line => line.fontSize)) : 0) ||
-    median(lines.map(line => line.fontSize)) || 12;
+    (substantialSizes.length >= 3 ? substantialSizes[Math.floor((substantialSizes.length - 1) * .25)] : 0) ||
+    median(uprightLines.map(line => line.fontSize)) || 12;
   const operators = cached ? null : await source.getOperatorList();
   const imageBoxes = cached?.imageBoxes || imageRegions(operators, viewport);
   const deterministic = detectSourceRegions({ lines, imageBoxes, page: number,

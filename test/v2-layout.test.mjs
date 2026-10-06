@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import { runnerImport } from 'vite';
-import { v2CompositePdf, v2MixedBandsPdf, v2VectorGraphPdf, v2BodyScalePdf, v2TitleHeadingsPdf, v2DenseVectorFigurePdf, v2SymbolFreeMatrixPdf, v2BorderlessTablePdf, v2IrregularTablePdf } from './pdf-fixture.mjs';
+import { v2CompositePdf, v2MixedBandsPdf, v2VectorGraphPdf, v2BodyScalePdf, v2TitleHeadingsPdf, v2DenseVectorFigurePdf, v2SymbolFreeMatrixPdf, v2BorderlessTablePdf, v2IrregularTablePdf, v2RotatedStampPdf, v2WrappedCaptionPdf } from './pdf-fixture.mjs';
 
 Uint8Array.prototype.toHex ??= function () { return Buffer.from(this).toString('hex'); };
 Map.prototype.getOrInsertComputed ??= function (key, callback) {
@@ -194,5 +194,36 @@ test('TABLE-003/010: irregular merged header stays source-rendered rather than i
     assert.equal(blocks[2].rows, null, 'uncertain merged structure uses source crop');
     const speech = blocks.filter(block => block.type === 'body').map(speechText).join(' ');
     for (const forbidden of ['Combined outcome', 'Control', 'Treatment']) assert.ok(!speech.includes(forbidden));
+  } finally { await model.task.destroy(); }
+});
+
+test('HEAD-016/FILTER-007: rotated margin stamp retains its source box but cannot become a heading or speech', async () => {
+  const { module: { openPdf, speechText } } = await runnerImport('/src/model.js');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
+  const model = await openPdf(v2RotatedStampPdf());
+  try {
+    const blocks = model.pages[0].blocks;
+    assert.deepEqual(blocks.filter(block => block.type !== 'header').map(block => [block.type, block.text]), [
+      ['title', 'A Source Geometry Study'], ['heading', '1 Introduction'],
+      ['body', 'The first paragraph remains ordinary prose.'],
+      ['body', 'The second paragraph remains ordinary prose.']
+    ]);
+    const stamp = blocks.find(block => block.text.startsWith('arXiv:'));
+    assert.equal(stamp?.type, 'header');
+    assert.ok(stamp.bbox.x <= 32 && stamp.bbox.w < 25 && stamp.bbox.h > 200, 'rotated source anchor is narrow and tall');
+    assert.ok(!blocks.filter(block => ['title', 'heading', 'body'].includes(block.type)).map(speechText).join(' ').includes('arXiv:'));
+  } finally { await model.task.destroy(); }
+});
+
+test('FIGURE-012: a wrapped figure caption is one exact caption rather than a spurious heading', async () => {
+  const { module: { openPdf } } = await runnerImport('/src/model.js');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
+  const model = await openPdf(v2WrappedCaptionPdf());
+  try {
+    assert.deepEqual(model.pages[0].blocks.map(block => [block.type, ['image'].includes(block.type) ? null : block.text]), [
+      ['title', 'Wrapped Caption Study'], ['body', 'A paragraph introduces the figure.'],
+      ['image', null], ['figure_caption', 'Figure 1: An example with different source labels.'],
+      ['body', 'The paragraph after the figure continues.']
+    ]);
   } finally { await model.task.destroy(); }
 });

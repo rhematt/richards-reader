@@ -6,8 +6,8 @@ function escape(text) {
 }
 
 export function pdfFixture(lines, { image = false, graphics = '' } = {}) {
-  const commands = lines.map(({ x, y, text, size = 12 }) =>
-    `BT /F1 ${size} Tf 1 0 0 1 ${x} ${y} Tm (${escape(text)}) Tj ET`
+  const commands = lines.map(({ x, y, text, size = 12, rotated = false }) =>
+    `BT /F1 ${size} Tf ${rotated ? '0 1 -1 0' : '1 0 0 1'} ${x} ${y} Tm (${escape(text)}) Tj ET`
   ).join('\n') + (image ? '\nq 160 0 0 100 60 400 cm /Im1 Do Q' : '') + (graphics ? `\n${graphics}` : '');
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -153,6 +153,22 @@ export const v2IrregularTablePdf = () => pdfFixture([
   { x: 50, y: 505, text: 'Table 4. Merged header cells.' },
   { x: 50, y: 465, text: 'The discussion continues after the source table.' }
 ]);
+
+export const v2RotatedStampPdf = () => pdfFixture([
+  { x: 32, y: 237, text: 'arXiv:0000.00000v1 [cs.CV] 1 Jan 2026', size: 20, rotated: true },
+  { x: 52, y: 747, text: 'A Source Geometry Study', size: 25 },
+  { x: 52, y: 690, text: '1 Introduction', size: 17 },
+  { x: 52, y: 645, text: 'The first paragraph remains ordinary prose.' },
+  { x: 52, y: 615, text: 'The second paragraph remains ordinary prose.' }
+]);
+
+export const v2WrappedCaptionPdf = () => pdfFixture([
+  { x: 50, y: 750, text: 'Wrapped Caption Study', size: 22 },
+  { x: 50, y: 680, text: 'A paragraph introduces the figure.', size: 9 },
+  { x: 60, y: 375, text: 'Figure 1: An example with dif-', size: 9 },
+  { x: 60, y: 357, text: 'ferent source labels.', size: 11 },
+  { x: 50, y: 325, text: 'The paragraph after the figure continues.', size: 9 }
+], { image: true });
 
 // First-page metadata and a dense small-font figure must not make ordinary
 // abstract lines look like headings or turn affiliations into a source table.
