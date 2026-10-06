@@ -1,0 +1,19 @@
+{
+  "name": "richards-reader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@fontsource/atkinson-hyperlegible": "5.3.0",
+    "@fontsource/lexend": "5.3.0",
+    "pdfjs-dist": "6.4.299"
+  },
+  "devDependencies": {
+    "vite": "7.3.6"
+  }
+}
