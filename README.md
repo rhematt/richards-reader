@@ -100,8 +100,8 @@ dependencies are installed and the application assets have loaded.
 
 ## Persistent macOS LAN deployment
 
-Goliath uses a Caddy system service for port 80 and a Reader LaunchAgent for
-port 4173 and Bonjour. This is the supported persistent macOS setup:
+A persistent macOS deployment uses a Caddy system service for port 80 and a
+Reader LaunchAgent for port 4173 and Bonjour:
 
 ```text
 Name lookup: reader.local --Bonjour/mDNS--> Mac's current LAN IPv4
@@ -117,9 +117,9 @@ the user must be logged in for the LaunchAgent to run.
 ### 1. Run Caddy as a system service
 
 Install Caddy with `brew install caddy` if needed, then put this in the
-Caddyfile used by the system service. On Goliath that file is
-`/opt/homebrew/etc/Caddyfile`; use `brew --prefix` to find the Homebrew
-directory on another Mac.
+Caddyfile used by the system service. On Apple Silicon Homebrew installations,
+it is typically `/opt/homebrew/etc/Caddyfile`; use `brew --prefix` to find the
+Homebrew directory on another Mac.
 
 ```caddyfile
 http://reader.local {
