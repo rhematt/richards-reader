@@ -163,7 +163,7 @@ launchctl kickstart -k gui/$(id -u)/com.richard.richards-reader
 
 The process hierarchy is `launchd → npm start → Reader server + dns-sd`.
 `npm start` owns the Bonjour registration and removes it when Reader exits.
-Keep the script and plist local; they contain account-specific paths.
+The script and plist contain account-specific paths.
 
 ### 3. Check the endpoint
 
@@ -279,10 +279,5 @@ python3 scripts/generate-fixtures.py /tmp/reader-fixtures
 
 The generator creates ordinary prose, a two-column academic paper with
 citations, a footnote and references, papers with images and tables, and an
-image-only scan. Generated PDFs are ignored by Git. See [TESTING.md](TESTING.md)
-for the manual checklist and results.
-
-## Repository hygiene
-
-Keep documents, generated files, logs, local service scripts and configuration,
-and credentials out of Git. No GitHub account is needed to run Reader locally.
+image-only scan. See [TESTING.md](TESTING.md) for the manual checklist and
+results.
