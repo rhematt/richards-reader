@@ -5,6 +5,7 @@ dist/
 .env*
 !.env.example
 Caddyfile
+/run-reader.sh
 coverage/
 playwright-report/
 test-results/

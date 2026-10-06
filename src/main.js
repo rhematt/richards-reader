@@ -7,7 +7,9 @@ const readerScroll = $('reader-scroll');
 const sourceContent = $('source-content');
 const readerContent = $('reader-content');
 const speech = window.speechSynthesis;
-const settingsIds = ['font-family', 'font-size', 'line-height', 'letter-spacing', 'word-spacing', 'paragraph-spacing', 'text-width', 'font-weight', 'text-align', 'preset', 'background-color', 'text-color', 'ruler-color', 'highlight-color', 'dim-level', 'ruler-mode', 'ruler-size', 'ruler-opacity', 'footnote-view', 'endnote-view', 'citation-view', 'reference-view', 'show-furniture', 'speak-citations', 'speak-footnotes', 'speak-endnotes', 'speak-references', 'speak-furniture'];
+const mobileMedia = window.matchMedia('(max-width: 700px), (max-width: 950px) and (max-height: 500px)');
+const isMobile = () => mobileMedia.matches;
+const settingsIds = ['font-family', 'font-size', 'line-height', 'letter-spacing', 'word-spacing', 'paragraph-spacing', 'text-width', 'font-weight', 'text-align', 'preset', 'background-color', 'text-color', 'ruler-color', 'highlight-color', 'dim-level', 'ruler-mode', 'ruler-size', 'ruler-opacity', 'speech-follow-ruler', 'footnote-view', 'endnote-view', 'citation-view', 'reference-view', 'show-furniture', 'speak-citations', 'speak-footnotes', 'speak-endnotes', 'speak-references', 'speak-furniture'];
 const presets = {
   paper: { 'background-color': '#fffdf8', 'text-color': '#26312e', 'ruler-color': '#f5d366', 'highlight-color': '#ffe18a' },
   dark: { 'background-color': '#182321', 'text-color': '#edf3eb', 'ruler-color': '#577e80', 'highlight-color': '#5c6846' },
@@ -17,9 +19,9 @@ const state = {
   model: null, mode: 'local', zoom: 1, currentPage: 1, selected: null,
   searchMatches: [], matchIndex: -1, speechItems: [], speechIndex: 0,
   speaking: false, paused: false, voice: null, localVoices: [],
-  bookmarks: [], docKey: null, sourceObserver: null, renderTasks: new Map(),
+  bookmarks: [], docKey: null, sourceObserver: null, cropObserver: null, renderTasks: new Map(),
   lastManualSource: 0, lastManualReader: 0, lastProgrammatic: 0, rulerY: null,
-  generation: 0, fetchController: null
+  generation: 0, fetchController: null, mobileReaderPosition: 0
 };
 
 function toast(message, duration = 4500) {
@@ -92,6 +94,9 @@ async function closeDocument() {
   state.fetchController = null;
   stopSpeech();
   state.sourceObserver?.disconnect();
+  state.cropObserver?.disconnect();
+  closeMobileOriginal();
+  document.body.classList.remove('document-open');
   for (const task of state.renderTasks.values()) task.cancel();
   state.renderTasks.clear();
   if (state.model?.task) await state.model.task.destroy();
@@ -110,6 +115,8 @@ async function closeDocument() {
   $('bookmark-list').textContent = 'None yet. Bookmarks and notes are cleared when the document closes.';
   $('close-button').disabled = true;
   $('page-indicator').textContent = 'Page — / —';
+  $('mobile-page-indicator').textContent = 'Page — / —';
+  $('mobile-original-button').disabled = true;
   $('search-count').textContent = '';
   $('file-input').value = '';
   modeStatus('local');
@@ -162,10 +169,14 @@ async function openPdfBytes(bytes, generation) {
   const model = await openPdf(bytes, (page, total) => { $('page-indicator').textContent = `Reading ${page} / ${total}`; });
   if (generation !== state.generation) { await model.task.destroy(); return; }
   state.model = model;
+  document.body.classList.add('document-open');
+  $('mobile-original-button').disabled = false;
   state.currentPage = 1;
   const sourcePadding = parseFloat(getComputedStyle(sourceContent).paddingLeft) + parseFloat(getComputedStyle(sourceContent).paddingRight);
-  state.zoom = Math.max(.5, Math.min(1, Math.floor((sourceScroll.clientWidth - sourcePadding - 20) / model.pages[0].width * 100) / 100));
+  const sourceWidth = isMobile() ? window.innerWidth : sourceScroll.clientWidth;
+  state.zoom = Math.max(.5, Math.min(1, Math.floor((sourceWidth - sourcePadding - 20) / model.pages[0].width * 100) / 100));
   $('zoom-value').textContent = `${Math.round(state.zoom * 100)}%`;
+  $('mobile-zoom-value').textContent = $('zoom-value').textContent;
   $('close-button').disabled = false;
   renderSource();
   renderAccessible();
@@ -183,6 +194,8 @@ async function openWebsite(html, url) {
   const nodes = [...root.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,figcaption')].filter(node => !node.querySelector('p,h1,h2,h3,h4,h5,h6'));
   const blocks = nodes.map((node, index) => ({ id: `web-${index}`, page: 1, bbox: null, type: /^H[1-6]$/.test(node.tagName) ? 'heading' : node.tagName === 'FIGCAPTION' ? 'figure_caption' : node.tagName === 'PRE' ? 'code' : 'body', text: node.textContent.replace(/\s+/g, ' ').trim(), confidence: 'HTML DOM' })).filter(block => block.text);
   state.model = { website: true, url, pages: [{ number: 1, blocks }] };
+  document.body.classList.add('document-open');
+  $('mobile-original-button').disabled = false;
   const notice = empty('Website source', 'The source page below is loaded directly from its site. Some sites block embedding. PDF coordinate synchronisation is unavailable for cross-origin webpages.');
   sourceContent.replaceChildren(notice);
   const link = document.createElement('a'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open original site in a new tab'; sourceContent.append(link);
@@ -206,7 +219,10 @@ function renderSource() {
       const x = (event.clientX - rect.left) / state.zoom;
       const y = (event.clientY - rect.top) / state.zoom;
       const block = nearestSourceBlock(page, x, y);
-      if (block) focusBlock(block, 'source');
+      if (block) {
+        if (isMobile()) closeMobileOriginal({ restore: false });
+        focusBlock(block, 'source');
+      }
     });
     sourceContent.append(shell);
   }
@@ -286,12 +302,18 @@ function renderAccessible() {
           element.append(table);
         } else {
           const label = document.createElement('span'); label.className = 'source-crop-label'; label.textContent = block.type === 'table' ? 'Source table region — structure uncertain' : block.type === 'equation' ? 'Source equation region' : block.type === 'image' ? 'Image from source page' : 'Unclassified source region';
-          const img = document.createElement('img'); img.className = 'source-crop'; img.dataset.crop = block.id; img.alt = label.textContent;
+          const img = document.createElement('img'); img.className = 'source-crop'; img.dataset.crop = block.id; img.dataset.page = block.page; img.alt = label.textContent;
           element.append(label, img);
         }
       } else appendSentences(element, block);
       if (!state.model.website) {
-        const anchor = document.createElement('span'); anchor.className = 'source-page-link'; anchor.textContent = `↗ source p. ${block.page}`; element.append(anchor);
+        const anchor = document.createElement('button'); anchor.type = 'button'; anchor.className = 'source-page-link'; anchor.textContent = `View original · p. ${block.page}`;
+        anchor.addEventListener('click', event => {
+          event.stopPropagation();
+          focusBlock(block, 'reader');
+          if (isMobile()) openMobileOriginal(block);
+        });
+        element.append(anchor);
       }
       element.addEventListener('click', event => {
         if (event.target.closest('.sentence')) state.speechIndex = state.speechItems.findIndex(item => item.element === event.target.closest('.sentence'));
@@ -310,6 +332,13 @@ function renderAccessible() {
   for (const page of state.model.pages) {
     const canvas = sourceContent.querySelector(`[data-page="${page.number}"] canvas`);
     if (canvas) fillCrops(page, canvas, Math.min(window.devicePixelRatio || 1, 2));
+  }
+  state.cropObserver?.disconnect();
+  if (!state.model.website && isMobile()) {
+    state.cropObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) renderPage(Number(entry.target.dataset.page));
+    }, { root: readerScroll, rootMargin: '450px' });
+    readerContent.querySelectorAll('.source-crop').forEach(image => state.cropObserver.observe(image));
   }
 }
 function appendSentences(element, block) {
@@ -389,7 +418,48 @@ function focusSource(block, gentle = false) {
   const target = shell.offsetTop + block.bbox.y * state.zoom - sourceScroll.clientHeight * .35;
   if (!gentle || Math.abs(sourceScroll.scrollTop - target) > sourceScroll.clientHeight * .45) sourceScroll.scrollTo({ top: target, behavior: gentle ? 'smooth' : 'auto' });
 }
-function updatePageIndicator() { $('page-indicator').textContent = `Page ${state.currentPage} / ${state.model?.pages.length || '—'}`; }
+function currentReadingBlock() {
+  if (!state.model) return null;
+  const targetY = readerScroll.getBoundingClientRect().top + readerScroll.clientHeight * .3;
+  const nearest = [...readerContent.querySelectorAll('.block')].sort((a, b) => Math.abs(a.getBoundingClientRect().top - targetY) - Math.abs(b.getBoundingClientRect().top - targetY))[0];
+  return state.model.pages.flatMap(page => page.blocks).find(block => block.id === nearest?.dataset.id) || state.selected;
+}
+function openMobileOriginal(block = null) {
+  if (!isMobile() || !state.model) return;
+  state.mobileReaderPosition = readerScroll.scrollTop;
+  closeSettings();
+  document.body.classList.add('mobile-original-open');
+  $('mobile-original-button').setAttribute('aria-expanded', 'true');
+  const anchor = block || currentReadingBlock();
+  if (anchor) focusBlock(anchor, 'reader');
+  if (anchor && !state.model.website) renderPage(anchor.page);
+  updateRuler();
+}
+function closeMobileOriginal({ restore = true } = {}) {
+  if (!document.body.classList.contains('mobile-original-open')) return;
+  document.body.classList.remove('mobile-original-open');
+  $('mobile-original-button').setAttribute('aria-expanded', 'false');
+  if (restore) {
+    state.lastProgrammatic = Date.now();
+    readerScroll.scrollTop = state.mobileReaderPosition;
+  }
+  updateRuler();
+}
+function openSettings() {
+  $('settings-panel').hidden = false;
+  $('settings-button').setAttribute('aria-expanded', 'true');
+  $('mobile-settings-button').setAttribute('aria-expanded', 'true');
+}
+function closeSettings() {
+  $('settings-panel').hidden = true;
+  $('settings-button').setAttribute('aria-expanded', 'false');
+  $('mobile-settings-button').setAttribute('aria-expanded', 'false');
+}
+function updatePageIndicator() {
+  const label = `Page ${state.currentPage} / ${state.model?.pages.length || '—'}`;
+  $('page-indicator').textContent = label;
+  $('mobile-page-indicator').textContent = label;
+}
 function navigatePage(number) {
   if (!state.model) return;
   const page = state.model.pages[Math.max(0, Math.min(state.model.pages.length - 1, number - 1))];
@@ -423,17 +493,21 @@ function stopSpeech() {
   readerContent.querySelectorAll('.sentence.active,.word.active').forEach(el => el.classList.remove('active'));
 }
 function refreshVoices() {
-  if (!speech) { $('voice-select').replaceChildren(new Option('Speech unavailable', '')); return; }
+  if (!speech) {
+    for (const id of ['voice-select', 'mobile-voice-select']) $(id).replaceChildren(new Option('Speech unavailable', ''));
+    return;
+  }
   state.localVoices = speech.getVoices().filter(voice => voice.localService === true);
-  const select = $('voice-select'); select.replaceChildren();
+  const selects = [$('voice-select'), $('mobile-voice-select')];
+  selects.forEach(select => select.replaceChildren());
   if (!state.localVoices.length) {
-    select.add(new Option('No verified local voices', ''));
+    selects.forEach(select => select.add(new Option('No verified local voices', '')));
     $('speech-status').textContent = 'Speech disabled: no verified device voice';
     $('speak-button').disabled = true;
   } else {
-    state.localVoices.forEach((voice, index) => select.add(new Option(`${voice.name} (${voice.lang}) · device`, String(index))));
+    state.localVoices.forEach((voice, index) => selects.forEach(select => select.add(new Option(`${voice.name} (${voice.lang}) · device`, String(index)))));
     const preferred = state.localVoices.findIndex(voice => voice.default);
-    select.value = String(Math.max(0, preferred));
+    selects.forEach(select => { select.value = String(Math.max(0, preferred)); });
     $('speech-status').textContent = state.model ? 'Device voice · no cloud TTS' : 'Open a document to use speech';
     $('speak-button').disabled = !state.model || !state.speechItems.length;
   }
@@ -454,7 +528,7 @@ function speakCurrent() {
   item.element?.classList.add('active');
   focusBlock(item.block, 'reader', true);
   item.element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  if (item.element) setTimeout(() => moveRulerToElement(item.element), 250);
+  if (item.element && (!isMobile() || setting('speech-follow-ruler'))) setTimeout(() => moveRulerToElement(item.element), 250);
   const utterance = new SpeechSynthesisUtterance(item.text);
   utterance.voice = voice; utterance.lang = voice.lang; utterance.rate = Number($('speech-rate').value) || 1;
   utterance.onboundary = event => {
@@ -462,7 +536,7 @@ function speakCurrent() {
     const count = (item.text.slice(0, event.charIndex).match(/\S+/g) || []).length;
     item.element?.querySelector('.word.active')?.classList.remove('active');
     item.element?.querySelector(`[data-word-index="${count}"]`)?.classList.add('active');
-    if (item.element) moveRulerToElement(item.element);
+    if (item.element && (!isMobile() || setting('speech-follow-ruler'))) moveRulerToElement(item.element);
   };
   utterance.onend = () => { if (state.speaking && !state.paused) { state.speechIndex++; speakCurrent(); } };
   utterance.onerror = () => { stopSpeech(); $('speech-status').textContent = 'Device speech stopped'; };
@@ -491,7 +565,11 @@ function updateRuler() {
   const lineHeight = parseFloat(getComputedStyle(readerContent).lineHeight) || 30;
   ruler.style.height = `${lineHeight * (mode === 'line' ? 1 : Number(setting('ruler-size')))}px`;
   if (state.rulerY == null) state.rulerY = readerScroll.clientHeight / 2;
-  ruler.style.top = `${state.rulerY + readerScroll.scrollTop - ruler.offsetHeight / 2}px`;
+  if (isMobile()) {
+    const rect = readerScroll.getBoundingClientRect();
+    state.rulerY = Math.max(ruler.offsetHeight / 2, Math.min(rect.height - ruler.offsetHeight / 2, state.rulerY));
+    ruler.style.top = `${rect.top + state.rulerY - ruler.offsetHeight / 2}px`;
+  } else ruler.style.top = `${state.rulerY + readerScroll.scrollTop - ruler.offsetHeight / 2}px`;
 }
 function moveRulerToElement(element) {
   if (setting('ruler-mode') === 'off') return;
@@ -513,28 +591,46 @@ function setupEvents() {
   $('next-page').addEventListener('click', () => navigatePage(state.currentPage + 1));
   $('zoom-out').addEventListener('click', () => changeZoom(-.15));
   $('zoom-in').addEventListener('click', () => changeZoom(.15));
+  $('mobile-previous-page').addEventListener('click', () => navigatePage(state.currentPage - 1));
+  $('mobile-next-page').addEventListener('click', () => navigatePage(state.currentPage + 1));
+  $('mobile-zoom-out').addEventListener('click', () => changeZoom(-.15));
+  $('mobile-zoom-in').addEventListener('click', () => changeZoom(.15));
+  $('mobile-original-button').addEventListener('click', () => openMobileOriginal());
+  $('mobile-original-close').addEventListener('click', () => closeMobileOriginal());
   $('search-input').addEventListener('input', () => { state.matchIndex = -1; updateSearch(); });
   $('search-previous').addEventListener('click', () => moveSearch(-1));
   $('search-next').addEventListener('click', () => moveSearch(1));
   $('search-input').addEventListener('keydown', event => { if (event.key === 'Enter') moveSearch(event.shiftKey ? -1 : 1); });
   $('heading-select').addEventListener('change', event => { const block = state.model?.pages.flatMap(page => page.blocks).find(b => b.id === event.target.value); if (block) focusBlock(block, 'source'); });
   $('maximize-source').addEventListener('click', () => { const maximised = document.body.classList.toggle('source-maximised'); document.documentElement.style.setProperty('--source-width', maximised ? 'calc(100% - 8px)' : '50%'); $('maximize-source').textContent = maximised ? 'Restore panes' : 'Maximise original'; });
-  $('settings-button').addEventListener('click', () => { $('settings-panel').hidden = false; $('settings-button').setAttribute('aria-expanded', 'true'); });
-  $('settings-close').addEventListener('click', () => { $('settings-panel').hidden = true; $('settings-button').setAttribute('aria-expanded', 'false'); });
+  $('settings-button').addEventListener('click', openSettings);
+  $('mobile-settings-button').addEventListener('click', openSettings);
+  $('settings-close').addEventListener('click', closeSettings);
   $('preset').addEventListener('change', event => { if (presets[event.target.value]) restoreSettings({ ...settingSnapshot(), ...presets[event.target.value] }); });
   for (const id of settingsIds.filter(id => id !== 'preset')) $(id).addEventListener('change', () => { if (id.endsWith('-color')) $('preset').value = 'custom'; applySettings(); });
   $('save-profile').addEventListener('click', () => { const name = $('profile-name').value.trim().slice(0, 40); if (!name) return toast('Enter a profile name.'); const profiles = loadProfiles(); profiles[name] = settingSnapshot(); localStorage.setItem('reader:profiles:v1', JSON.stringify(profiles)); loadProfiles(); $('saved-profiles').value = name; toast(`Saved profile: ${name}`); });
-  $('saved-profiles').addEventListener('change', event => { const profile = loadProfiles()[event.target.value]; if (profile) restoreSettings(profile); });
+  $('saved-profiles').addEventListener('change', event => {
+    const name = event.target.value;
+    const profile = loadProfiles()[name];
+    if (profile) { $('saved-profiles').value = name; restoreSettings(profile); }
+  });
   $('bookmark-button').addEventListener('click', addBookmark);
   $('speak-button').addEventListener('click', toggleSpeech);
   $('previous-sentence').addEventListener('click', () => moveSpeech(-1, 'sentence'));
   $('next-sentence').addEventListener('click', () => moveSpeech(1, 'sentence'));
   $('previous-paragraph').addEventListener('click', () => moveSpeech(-1, 'paragraph'));
   $('next-paragraph').addEventListener('click', () => moveSpeech(1, 'paragraph'));
-  $('voice-select').addEventListener('change', () => { if (state.speaking) startSpeech(); });
+  for (const id of ['voice-select', 'mobile-voice-select']) $(id).addEventListener('change', event => {
+    $(id === 'voice-select' ? 'mobile-voice-select' : 'voice-select').value = event.target.value;
+    if (state.speaking) startSpeech();
+  });
   speech?.addEventListener?.('voiceschanged', refreshVoices);
-  readerScroll.addEventListener('pointermove', event => { if (setting('ruler-mode') === 'off') return; state.rulerY = event.clientY - readerScroll.getBoundingClientRect().top; updateRuler(); });
-  readerScroll.addEventListener('touchmove', event => { if (setting('ruler-mode') === 'off') return; state.rulerY = event.touches[0].clientY - readerScroll.getBoundingClientRect().top; updateRuler(); }, { passive: true });
+  readerScroll.addEventListener('pointermove', event => { if (isMobile() || setting('ruler-mode') === 'off') return; state.rulerY = event.clientY - readerScroll.getBoundingClientRect().top; updateRuler(); });
+  readerScroll.addEventListener('touchmove', event => { if (isMobile() || setting('ruler-mode') === 'off') return; state.rulerY = event.touches[0].clientY - readerScroll.getBoundingClientRect().top; updateRuler(); }, { passive: true });
+  const grip = $('ruler-grip'); let draggingRuler = false;
+  grip.addEventListener('pointerdown', event => { if (!isMobile()) return; event.preventDefault(); event.stopPropagation(); draggingRuler = true; grip.setPointerCapture(event.pointerId); });
+  grip.addEventListener('pointermove', event => { if (!draggingRuler) return; event.preventDefault(); state.rulerY = event.clientY - readerScroll.getBoundingClientRect().top; updateRuler(); });
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) grip.addEventListener(name, () => { draggingRuler = false; });
   readerScroll.tabIndex = 0;
   readerScroll.addEventListener('keydown', event => { if (['ArrowUp', 'ArrowDown'].includes(event.key) && setting('ruler-mode') !== 'off') { event.preventDefault(); state.rulerY = Math.max(0, Math.min(readerScroll.clientHeight, (state.rulerY || readerScroll.clientHeight / 2) + (event.key === 'ArrowDown' ? 1 : -1) * (parseFloat(getComputedStyle(readerContent).lineHeight) || 30))); updateRuler(); } });
   const divider = $('pane-divider'); let dragging = false;
@@ -546,12 +642,20 @@ function setupEvents() {
   let sourceTimer, readerTimer;
   sourceScroll.addEventListener('scroll', () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => syncFromSource(), 180); });
   readerScroll.addEventListener('scroll', () => { clearTimeout(readerTimer); readerTimer = setTimeout(() => syncFromReader(), 180); updateRuler(); });
+  mobileMedia.addEventListener('change', () => {
+    if (!isMobile()) closeMobileOriginal();
+    if (state.model) renderAccessible();
+    updateRuler();
+  });
+  window.addEventListener('resize', updateRuler);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMobileOriginal(); closeSettings(); } });
 }
 function changeZoom(delta) {
   if (!state.model || state.model.website) return;
   const page = state.currentPage;
   state.zoom = Math.max(.5, Math.min(2.5, Math.round((state.zoom + delta) * 100) / 100));
   $('zoom-value').textContent = `${Math.round(state.zoom * 100)}%`;
+  $('mobile-zoom-value').textContent = $('zoom-value').textContent;
   for (const task of state.renderTasks.values()) task.cancel(); state.renderTasks.clear();
   renderSource();
   const selected = state.selected;

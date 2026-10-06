@@ -10,7 +10,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ordinaryPdf, figureAndTablePdf } from './pdf-fixture.mjs';
 
 const edge = process.env.READER_TEST_BROWSER || '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
-const port = 5189;
+const production = process.env.READER_TEST_PRODUCTION === '1';
+const port = production ? 5190 : 5189;
 
 async function until(check, timeout = 12000) {
   const start = Date.now();
@@ -49,9 +50,9 @@ class DevTools {
   }
   async viewport(width, height, mobile = true) {
     await this.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile, screenWidth: width, screenHeight: height });
-    await this.call('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: mobile ? 1 : 0 });
-    await this.call('Page.reload', { ignoreCache: true });
+    await this.call('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: 1 });
     await until(() => this.evaluate('document.readyState === "complete" && !!document.querySelector("#reader-scroll")'));
+    await this.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
   }
   async file(path) {
     const { root } = await this.call('DOM.getDocument');
@@ -67,7 +68,9 @@ test('MOBILE-001..009: phone surfaces, source drawer, ruler and tablet regressio
   const complex = join(temp, 'complex.pdf');
   await writeFile(ordinary, ordinaryPdf());
   await writeFile(complex, figureAndTablePdf());
-  const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: process.cwd(), stdio: 'ignore' });
+  const server = spawn(process.execPath, production ? ['server.mjs'] : ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
+    cwd: process.cwd(), stdio: 'ignore', env: { ...process.env, HOST: '127.0.0.1', PORT: String(port) }
+  });
   let browser;
   let cdp;
   try {
@@ -89,23 +92,39 @@ test('MOBILE-001..009: phone surfaces, source drawer, ruler and tablet regressio
         const visible = id => { const node = document.getElementById(id); return !!node && getComputedStyle(node).display !== 'none' && node.getBoundingClientRect().width > 0; };
         return { readerWidth: reader.width, sourceWidth: source.width, appWidth: document.documentElement.scrollWidth, viewportWidth: innerWidth,
           original: visible('mobile-original-button'), settings: visible('mobile-settings-button'), play: visible('speak-button'),
-          previous: visible('previous-sentence'), next: visible('next-sentence'), speed: visible('speech-rate'), search: visible('search-input') };
+          previous: visible('previous-sentence'), next: visible('next-sentence'), speed: visible('speech-rate'), search: visible('search-input'),
+          touchHeights: ['mobile-original-button','mobile-settings-button','speak-button','previous-sentence','next-sentence','speech-rate','search-input','heading-select'].map(id => document.getElementById(id).getBoundingClientRect().height) };
       })()`);
       assert.ok(layout.readerWidth >= width - 2, `${width}×${height}: reading pane fills the phone`);
       assert.ok(layout.sourceWidth === 0, `${width}×${height}: no permanent original pane`);
       assert.ok(layout.appWidth <= layout.viewportWidth + 1, `${width}×${height}: no application horizontal scroll`);
       for (const key of ['original', 'settings', 'play', 'previous', 'next', 'speed', 'search']) assert.ok(layout[key], `${width}×${height}: ${key} is available`);
+      assert.ok(layout.touchHeights.every(height => height >= 43), `${width}×${height}: primary controls are at least 44 CSS pixels high`);
     }
 
     await cdp.viewport(390, 844);
     await cdp.file(ordinary);
+    if (process.env.READER_TEST_SCREENSHOT) {
+      const { data } = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      await writeFile(process.env.READER_TEST_SCREENSHOT, Buffer.from(data, 'base64'));
+    }
     await cdp.evaluate(`document.querySelector('#reader-scroll').scrollTop = 100`);
     const initialTop = await cdp.evaluate('document.querySelector("#reader-scroll").scrollTop');
     await cdp.evaluate(`document.querySelector('#reader-content .block').click(); document.querySelector('#mobile-original-button').click()`);
     const drawer = await cdp.evaluate(`(() => ({ open: document.body.classList.contains('mobile-original-open'), highlight: !!document.querySelector('.source-highlight'), source: document.querySelector('#source-pane').getBoundingClientRect().width }))()`);
     assert.ok(drawer.open && drawer.source >= 389 && drawer.highlight, 'MOBILE-003: drawer shows the selected source box');
+    await until(() => cdp.evaluate('!!document.querySelector("#source-content canvas")'));
+    if (process.env.READER_TEST_DRAWER_SCREENSHOT) {
+      const { data } = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      await writeFile(process.env.READER_TEST_DRAWER_SCREENSHOT, Buffer.from(data, 'base64'));
+    }
+    const zoomBefore = await cdp.evaluate('document.querySelector("#mobile-zoom-value").textContent');
+    await cdp.evaluate('document.querySelector("#mobile-zoom-in").click()');
+    assert.notEqual(await cdp.evaluate('document.querySelector("#mobile-zoom-value").textContent'), zoomBefore, 'MOBILE-003: drawer zoom works');
     await cdp.evaluate(`document.querySelector('#mobile-original-close').click()`);
     assert.equal(await cdp.evaluate('document.querySelector("#reader-scroll").scrollTop'), initialTop, 'MOBILE-003: closing preserves reading position');
+    await cdp.evaluate(`document.querySelector('#search-input').value = 'Paragraph'; document.querySelector('#search-input').dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#search-next').click()`);
+    assert.ok(await cdp.evaluate(`!!document.querySelector('.block.search-current.selected') && !!document.querySelector('.source-highlight')`), 'MOBILE-002: search retains accessible and source linkage');
 
     await cdp.evaluate(`document.querySelector('#ruler-mode').value = 'line'; document.querySelector('#ruler-mode').dispatchEvent(new Event('change', { bubbles: true }))`);
     const ruler = await cdp.evaluate(`(() => { const node = document.querySelector('#ruler'); return { position: getComputedStyle(node).position, top: node.getBoundingClientRect().top, grip: !!document.querySelector('#ruler-grip') } })()`);
@@ -114,10 +133,42 @@ test('MOBILE-001..009: phone surfaces, source drawer, ruler and tablet regressio
     await cdp.evaluate(`document.querySelector('#reader-scroll').scrollTop += 80`);
     const afterScroll = await cdp.evaluate('document.querySelector("#ruler").getBoundingClientRect().top');
     assert.ok(Math.abs(afterScroll - ruler.top) <= 1, 'MOBILE-004: document scroll does not move ruler');
+    const beforeGrip = await cdp.evaluate(`(() => { const grip = document.querySelector('#ruler-grip').getBoundingClientRect(); return { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2, scroll: document.querySelector('#reader-scroll').scrollTop }; })()`);
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: beforeGrip.x, y: beforeGrip.y, button: 'left', clickCount: 1 });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: beforeGrip.x, y: beforeGrip.y + 45, button: 'left', buttons: 1 });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: beforeGrip.x, y: beforeGrip.y + 45, button: 'left', clickCount: 1 });
+    const afterGrip = await cdp.evaluate(`({ top: document.querySelector('#ruler').getBoundingClientRect().top, scroll: document.querySelector('#reader-scroll').scrollTop })`);
+    assert.ok(afterGrip.top > afterScroll + 30, 'MOBILE-004: dragging grip moves ruler');
+    assert.equal(afterGrip.scroll, beforeGrip.scroll, 'MOBILE-004: dragging grip does not scroll document');
+    const touchGrip = await cdp.evaluate(`(() => { const rect = document.querySelector('#ruler-grip').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, top: document.querySelector('#ruler').getBoundingClientRect().top, scroll: document.querySelector('#reader-scroll').scrollTop }; })()`);
+    await cdp.call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touchGrip.x, y: touchGrip.y, id: 1 }] });
+    await cdp.call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: touchGrip.x, y: touchGrip.y + 30, id: 1 }] });
+    await cdp.call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const touchResult = await cdp.evaluate(`({ top: document.querySelector('#ruler').getBoundingClientRect().top, scroll: document.querySelector('#reader-scroll').scrollTop })`);
+    assert.ok(touchResult.top > touchGrip.top + 15, 'MOBILE-004: touch drag moves grip');
+    assert.equal(touchResult.scroll, touchGrip.scroll, 'MOBILE-004: touch grip does not scroll document');
+
+    await cdp.evaluate(`document.querySelector('#mobile-settings-button').click()`);
+    assert.ok(await cdp.evaluate(`!document.querySelector('#settings-panel').hidden && document.querySelector('#reader-pane').getBoundingClientRect().width >= 389`), 'MOBILE-007: settings sheet leaves reading width intact');
+    await cdp.evaluate(`(() => { const size = document.querySelector('#font-size'); size.value = '23'; size.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('#profile-name').value = 'Mobile test'; document.querySelector('#save-profile').click(); size.value = '19'; size.dispatchEvent(new Event('change', { bubbles: true })); const profiles = document.querySelector('#saved-profiles'); profiles.value = 'Mobile test'; profiles.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    assert.equal(await cdp.evaluate('document.querySelector("#font-size").value'), '23', 'MOBILE-007: saved profile restores typography');
+    await cdp.evaluate(`document.querySelector('#settings-close').click()`);
+    assert.ok(await cdp.evaluate(`document.querySelector('#settings-panel').hidden`), 'MOBILE-007: settings closes');
 
     await cdp.file(complex);
+    await until(() => cdp.evaluate('!!document.querySelector(".block[data-type=\'image\'],.block[data-type=\'table\']")'));
+    await cdp.evaluate(`document.querySelector('.block[data-type="image"]')?.scrollIntoView()`);
+    await until(() => cdp.evaluate('document.querySelector(".block[data-type=\'image\'] img")?.src.startsWith("data:image/png")'));
     const sourceBlock = await cdp.evaluate(`(() => { const block = document.querySelector('.block[data-type="image"],.block[data-type="table"]'); block?.querySelector('.source-page-link')?.click(); return { found: !!block, open: document.body.classList.contains('mobile-original-open'), highlight: !!document.querySelector('.source-highlight') }; })()`);
     assert.ok(sourceBlock.found && sourceBlock.open && sourceBlock.highlight, 'MOBILE-006: complex source link opens highlighted original');
+    const complexTop = await cdp.evaluate('document.querySelector("#reader-scroll").scrollTop');
+    await cdp.evaluate(`document.querySelector('#mobile-original-close').click()`);
+    assert.equal(await cdp.evaluate('document.querySelector("#reader-scroll").scrollTop'), complexTop, 'MOBILE-006: source inspection returns to reading position');
+    await cdp.evaluate(`document.querySelector('#mobile-original-button').click()`);
+    await cdp.evaluate(`(() => { const box = document.querySelector('.source-highlight').getBoundingClientRect(); const shell = document.querySelector('.source-highlight').closest('.page-shell'); shell.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 })); })()`);
+    assert.ok(await cdp.evaluate(`!document.body.classList.contains('mobile-original-open') && !!document.querySelector('.block.selected')`), 'MOBILE-003: selecting source returns to the linked accessible block');
+    await cdp.viewport(844, 390);
+    assert.ok(await cdp.evaluate(`document.querySelector('#reader-pane').getBoundingClientRect().width >= 843 && document.documentElement.scrollWidth <= innerWidth + 1`), 'MOBILE-008: loaded PDF remains usable in landscape');
 
     await cdp.viewport(768, 1024);
     const tablet = await cdp.evaluate(`(() => ({ source: document.querySelector('#source-pane').getBoundingClientRect().width, reader: document.querySelector('#reader-pane').getBoundingClientRect().width }))()`);
