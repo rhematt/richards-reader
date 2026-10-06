@@ -164,7 +164,7 @@ async function openPdfBytes(bytes, generation) {
   state.model = model;
   state.currentPage = 1;
   const sourcePadding = parseFloat(getComputedStyle(sourceContent).paddingLeft) + parseFloat(getComputedStyle(sourceContent).paddingRight);
-  state.zoom = Math.max(.5, Math.min(1, Math.floor((sourceScroll.clientWidth - sourcePadding - 4) / model.pages[0].width * 100) / 100));
+  state.zoom = Math.max(.5, Math.min(1, Math.floor((sourceScroll.clientWidth - sourcePadding - 20) / model.pages[0].width * 100) / 100));
   $('zoom-value').textContent = `${Math.round(state.zoom * 100)}%`;
   $('close-button').disabled = false;
   renderSource();
