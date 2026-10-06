@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#edf1ef">
+  <title>Reader — local accessibility reading</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">R</span><div><strong>Reader</strong><small>Original beside accessible</small></div></div>
+      <div class="open-actions">
+        <label class="button primary" for="file-input">Open PDF</label>
+        <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
+        <form id="url-form"><input id="url-input" type="url" placeholder="https://example.com/document.pdf" aria-label="Document URL"><button type="submit">Open URL</button></form>
+        <button id="close-button" type="button" disabled>Close</button>
+      </div>
+      <div id="privacy-status" class="privacy-status" aria-live="polite"><b>LOCAL DOCUMENT MODE</b><span>Processing: this browser · Upload: none · Speech: local only</span></div>
+    </header>
+
+    <div class="toolbar">
+      <div class="toolbar-group"><button id="previous-page" type="button" aria-label="Previous page">‹</button><span id="page-indicator">Page — / —</span><button id="next-page" type="button" aria-label="Next page">›</button><button id="zoom-out" type="button" aria-label="Zoom out">−</button><output id="zoom-value">100%</output><button id="zoom-in" type="button" aria-label="Zoom in">+</button></div>
+      <div class="toolbar-group search-group"><input id="search-input" type="search" placeholder="Search this document" aria-label="Search document"><span id="search-count"></span><button id="search-previous" type="button" aria-label="Previous match">↑</button><button id="search-next" type="button" aria-label="Next match">↓</button></div>
+      <div class="toolbar-group"><select id="heading-select" aria-label="Jump to heading"><option value="">Headings</option></select><button id="bookmark-button" type="button" title="Bookmark current source anchor">☆ Bookmark</button><button id="maximize-source" type="button">Maximise original</button><button id="settings-button" type="button" aria-expanded="false">Reading settings</button></div>
+    </div>
+
+    <main class="workspace">
+      <section id="source-pane" class="pane source-pane" aria-label="Original document">
+        <div class="pane-header"><h1>Original document</h1><span>Authoritative source</span></div>
+        <div id="source-scroll" class="pane-scroll"><div id="source-content" class="source-content"><div class="empty-state"><b>Open a PDF</b><p>Choose a file from this device or drop one here. Its bytes stay in this browser.</p></div></div></div>
+      </section>
+      <div id="pane-divider" class="pane-divider" role="separator" tabindex="0" aria-label="Resize reading panes" aria-orientation="vertical"></div>
+      <section id="reader-pane" class="pane reader-pane" aria-label="Accessible reading view">
+        <div class="pane-header"><h1>Accessible reading view</h1><span>Linked to source</span></div>
+        <div id="reader-scroll" class="pane-scroll"><div id="reader-content" class="reader-content"><div class="empty-state"><b>Read with context</b><p>Select reflowed text to locate its exact region in the original. The original remains visible alongside it.</p></div></div><div id="ruler" class="ruler" hidden aria-hidden="true"></div></div>
+      </section>
+    </main>
+
+    <div class="speechbar" aria-label="Speech controls"><button id="previous-paragraph" title="Previous paragraph">⇤ ¶</button><button id="previous-sentence" title="Previous sentence">‹ Sentence</button><button id="speak-button" class="primary" type="button">Play</button><button id="next-sentence" title="Next sentence">Sentence ›</button><button id="next-paragraph" title="Next paragraph">¶ ⇥</button><select id="voice-select" aria-label="Local voice"><option value="">Checking local voices…</option></select><label>Speed <input id="speech-rate" type="number" min="0.5" max="2.5" step="0.1" value="1" aria-label="Speech speed"></label><span id="speech-status">Local voices only</span></div>
+
+    <aside id="settings-panel" class="settings-panel" hidden aria-label="Reading settings">
+      <div class="settings-heading"><h2>Reading settings</h2><button id="settings-close" aria-label="Close settings">✕</button></div>
+      <div class="settings-body">
+        <fieldset><legend>Typography</legend><label>Font <select id="font-family"><option value="Atkinson">Atkinson Hyperlegible</option><option value="OpenDyslexic">OpenDyslexic</option><option value="Lexend">Lexend</option><option value="system">System sans-serif</option><option value="serif">System serif</option></select></label><label>Size <input id="font-size" type="number" min="12" max="40" step="1" value="19"> px</label><label>Line height <input id="line-height" type="number" min="1" max="2.5" step="0.1" value="1.65"></label><label>Letter spacing <input id="letter-spacing" type="number" min="-1" max="5" step="0.1" value="0"> px</label><label>Word spacing <input id="word-spacing" type="number" min="0" max="12" step="0.5" value="0"> px</label><label>Paragraph spacing <input id="paragraph-spacing" type="number" min="0" max="60" step="2" value="22"> px</label><label>Text width <input id="text-width" type="number" min="28" max="90" step="1" value="62"> ch</label><label>Weight <select id="font-weight"><option value="400">Regular</option><option value="500">Medium</option><option value="700">Bold</option></select></label><label>Alignment <select id="text-align"><option value="left">Left</option><option value="justify">Justified</option><option value="center">Centred</option></select></label></fieldset>
+        <fieldset><legend>Colours and profiles</legend><label>Preset <select id="preset"><option value="paper">Soft paper</option><option value="dark">Dark</option><option value="cream">Warm cream</option><option value="custom">Custom</option></select></label><label>Background <input id="background-color" type="color" value="#fffdf8"></label><label>Text <input id="text-color" type="color" value="#26312e"></label><label>Ruler <input id="ruler-color" type="color" value="#f5d366"></label><label>Active highlight <input id="highlight-color" type="color" value="#ffe18a"></label><label>Inactive dimming <input id="dim-level" type="number" min="0" max="90" step="5" value="55"> %</label><div class="inline-actions"><input id="profile-name" placeholder="Profile name" aria-label="Profile name"><button id="save-profile" type="button">Save</button></div><label>Saved profile <select id="saved-profiles"><option value="">Choose…</option></select></label></fieldset>
+        <fieldset><legend>Reading focus</legend><label>Mode <select id="ruler-mode"><option value="off">Off</option><option value="line">Single line</option><option value="window">Multi-line window</option><option value="dim">Dim above and below</option></select></label><label>Window height <input id="ruler-size" type="number" min="1" max="8" step="1" value="2"> lines</label><label>Opacity <input id="ruler-opacity" type="number" min="10" max="100" step="5" value="45"> %</label><p class="hint">Move the pointer or touch the reading view. Use ↑ and ↓ when the reading view has focus.</p></fieldset>
+        <fieldset><legend>Visual filtering</legend><label>Footnotes <select id="footnote-view"><option value="show">Show</option><option value="collapse">Collapse</option><option value="hide">Hide</option></select></label><label>Endnotes <select id="endnote-view"><option value="show">Show</option><option value="collapse">Collapse</option><option value="hide">Hide</option></select></label><label>Citations <select id="citation-view"><option value="show">Show</option><option value="dim">Dim</option><option value="hide">Hide</option></select></label><label>References <select id="reference-view"><option value="show">Show</option><option value="collapse">Collapse</option><option value="hide">Hide</option></select></label><label><input id="show-furniture" type="checkbox"> Show headers, footers and page numbers</label></fieldset>
+        <fieldset><legend>Speech filtering</legend><label><input id="speak-citations" type="checkbox"> Speak inline citations</label><label><input id="speak-footnotes" type="checkbox"> Speak footnotes</label><label><input id="speak-endnotes" type="checkbox"> Speak endnotes</label><label><input id="speak-references" type="checkbox"> Speak references</label><label><input id="speak-furniture" type="checkbox"> Speak headers, footers and page numbers</label></fieldset>
+        <fieldset><legend>Session bookmarks</legend><div id="bookmark-list" class="bookmark-list">None yet. Bookmarks and notes are cleared when the document closes.</div></fieldset>
+      </div>
+    </aside>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
