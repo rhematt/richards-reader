@@ -4,16 +4,18 @@
 as a local web server or as a LAN service at `http://reader.local/`. Documents
 stay in the browser on the device that opens them.**
 
-Reader shows the original PDF beside a reflowed reading view. Each extracted
-block links back to its page and source coordinates. The server delivers
+On desktop and iPad, Reader shows the original PDF beside a reflowed reading
+view. On a phone, the reading view fills the screen and the original opens in
+a source-linked panel. Each extracted block links back to its page and source
+coordinates. The server delivers
 application files only; it has no document upload, storage, OCR, TTS,
 analytics, or URL-proxy endpoint.
 
 It supports local PDFs, source-linked navigation and search, reading controls,
-and speech using verified device voices. The original PDF remains available
-beside the accessible view. Reader targets current iPadOS Safari and Edge,
-plus desktop Safari and Chromium-based browsers. See [TESTING.md](TESTING.md)
-for the tested cases and browser limits.
+and speech using verified device voices. Reader targets current iPadOS Safari
+and Edge, plus desktop Safari and Chromium-based browsers. Phone layout tests
+are automated; an actual iPhone Safari result is still pending. See
+[TESTING.md](TESTING.md) for tested cases and browser limits.
 
 ## Quick start
 
@@ -252,6 +254,15 @@ extracted text, annotations, and reading content are not uploaded to the Mac.
 
 ## Use
 
+- On a phone, read in the full-width accessible view. Tap **Original PDF** to
+  inspect the source at the current reading position, then **Close** to return.
+  A block's source link opens the same panel at its page and bounding box.
+  Page and zoom controls are inside the original panel.
+- On a phone, **Aa** opens the settings sheet. The bottom bar keeps sentence
+  navigation, play/pause and speed available while reading. Choose a verified
+  device voice in the settings sheet. The reading ruler stays over the page as
+  text scrolls; drag its round grip to move it. **Follow speech with ruler**
+  can be changed in Reading focus settings.
 - Click a reflowed block to highlight its source bounding box. Click a PDF page
   to select the nearest source block and reveal it in the reading view. Scroll
   sync uses block anchors and pauses when the other pane was just manipulated.
@@ -330,8 +341,14 @@ inside the client browser without adding a server proxy.
 
 ## Test with synthetic material
 
-`npm test` runs `IPAD-PDF-001` with synthetic PDFs while stream async iteration
-is unavailable. To create more local test files, install Python with
+`npm test` runs `IPAD-PDF-001` and the mobile viewport checks with synthetic
+PDFs. The mobile browser test uses Microsoft Edge on macOS; on another system,
+set `READER_TEST_BROWSER` to a Chromium or Edge executable. If no browser is
+available, that test is skipped. To check the built application rather than
+the development server, run `npm run build` followed by
+`READER_TEST_PRODUCTION=1 node --test test/mobile-ui.test.mjs`.
+
+To create more local test files, install Python with
 `reportlab` and `Pillow`, then run:
 
 ```sh

@@ -21,10 +21,24 @@ before calling the mobile interface fully verified.
 | MOBILE-008 Landscape | Phone landscape keeps the mobile interaction model and has no horizontal application scroll. | `test/mobile-ui.test.mjs`: both landscape sizes. | Rotate an iPhone while reading. |
 | MOBILE-009 Regression protection | Desktop and iPad remain dual-pane. PDF coordinates, columns, figures, tables, filters, local TTS, privacy, Bonjour/Caddy and existing tests remain intact. | Existing PDF, model and launcher suites plus `test/mobile-ui.test.mjs` tablet/desktop geometry. | Repeat iPad Safari/Edge and desktop spot checks. |
 
-**Status, 6 Oct 2026:** Requirements recorded before mobile implementation.
-Real-device iPhone Safari checks are pending. Record actual device/browser
-results here after testing; viewport emulation cannot establish a real-device
-pass.
+**Automated result, 6 Oct 2026:** Passed in headless Edge at 390×844 and
+430×932 portrait, 844×390 and 932×430 landscape, 768×1024 tablet, and
+1280×800 desktop. The test opens synthetic text and figure/table PDFs; checks
+the full-width reading pane, 44-pixel primary touch controls, source box and
+original canvas, drawer zoom and return position, original-to-reading selection,
+search/source linkage, a figure crop,
+complex-content source link, settings sheet and saved profile, ruler position
+during document scrolling, mouse and emulated touch grip dragging, and the
+desktop/tablet dual-pane layout. It passed against both Vite's development
+server and the built static app with Reader's production CSP. `npm test`
+passed 9/9 and `npm run build` succeeded. The existing multi-column and
+iPadOS PDF extraction regressions remain in the passing suite.
+
+**Real-device status:** iPhone Safari portrait/landscape, ruler grip,
+source drawer and device TTS are pending. The post-change iPad Safari/Edge
+regression check is also pending. Emulation and prior iPad results do not
+establish these new real-device passes. Record device/browser versions and
+results here after testing.
 
 ## LAN-MDNS-001 — Dynamic `reader.local` registration
 
