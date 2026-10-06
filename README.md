@@ -295,8 +295,10 @@ renders pages there. Each PDF block records a page number and bounding box in
 the PDF.js page viewport at scale 1. Cropped source regions are generated from
 local canvases.
 No client code sends PDF bytes or derived content to the laptop or elsewhere.
-The production CSP on `/` uses `connect-src 'none'`, blocks frames and arbitrary
-images, and loads scripts, workers, and fonts only from the application origin.
+The production CSP allows same-origin connections for lazy-loaded layout model
+and WASM assets, plus narrowly scoped WebAssembly compilation. It blocks
+arbitrary external images and loads scripts, workers, and fonts only from the
+application origin in local document mode.
 The server rejects methods other than GET/HEAD and does not read request bodies.
 
 For a **requested URL**, the laptop receives the requested URL as part of the
@@ -316,16 +318,25 @@ at build time; runtime assets are served locally from `dist/`. See
 
 ## Extraction policy and limits
 
-The original PDF remains authoritative. Reader uses PDF.js text geometry for
-page-linked blocks and heuristic classification for headings, notes, citations,
-references, code, captions, and tables. Repeated page furniture is suppressed
+The original PDF remains authoritative. Reader uses PDF.js text geometry and
+source-object ownership for page-linked blocks. On structurally complex pages,
+a lazy-loaded browser-local PP-DocLayout-S detector proposes additional regions;
+PDF geometry still determines which text objects belong to them. Trivial prose
+pages use the deterministic path. Headings, notes, citations, references, code,
+captions, and tables use source-aware classification. Repeated page furniture is suppressed
 from reading by default but remains in the source model. Aligned text tables
 become HTML tables only when columns are consistent; otherwise a source crop
 is shown. Embedded PDF image operators are cropped from the rendered source.
 Equations detected from text are shown as source regions. Complex vector
 figures, untagged structure, unusual writing directions, rotated text, and
-some multi-column layouts can be misidentified; inspect the original before
+some multi-column layouts can still be misidentified; inspect the original before
 relying on the projection. Reader does not invent missing structure.
+
+Review Mode on desktop and tablet stores pen, markup, comment, and free-text
+annotations in a separate PDF-coordinate layer. Export writes a new
+`-marked.pdf` with standard PDF annotations and preserves selectable source
+text. Session marks are not uploaded or written into the original file. Phones
+can view and navigate annotations without precision authoring controls.
 
 Image-only PDFs display **“No usable text layer detected. Local OCR support is
 not yet enabled.”** Their original pages still render. Browser-local OCR can

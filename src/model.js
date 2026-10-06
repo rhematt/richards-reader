@@ -1,6 +1,7 @@
 import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { detectSourceRegions } from './layout/regions.js';
+import { detectSourceRegions, mergeDetectedRegions } from './layout/regions.js';
+import { detectPageLayout, needsLayoutInference } from './layout/detector.js';
 import { reconcileRegions } from './layout/reconcile.js';
 import { orderRegions } from './layout/reading-order.js';
 
@@ -23,6 +24,9 @@ const union = boxes => ({
   h: Math.max(...boxes.map(b => b.y + b.h)) - Math.min(...boxes.map(b => b.y))
 });
 const clean = text => text.replace(/\s+/g, ' ').trim();
+const headingLikeText = text => text.length < 100 &&
+  (/^(?:\d+(?:\.\d+)*\s+)?[A-Z][A-Z\s&:–-]{3,}$/.test(text) ||
+    /^\d+(?:\.\d+)*\s+[A-Z][\p{L}\s&:–-]+$/u.test(text));
 
 function textRuns(content, viewport, page) {
   return content.items.filter(item => typeof item.str === 'string' && item.str.trim()).map((item, index) => {
@@ -137,6 +141,7 @@ function makeTextBlocks(lines, page, pageWidth, pageHeight, medianSize) {
     else if (box.y < pageHeight * .045 && fontSize <= medianSize * 1.15) block.type = 'header';
     else if (box.y > pageHeight * .94 && /^\d{1,4}$/.test(text)) block.type = 'page_number';
     else if (box.y > pageHeight * .94 && fontSize <= medianSize * 1.15) block.type = 'footer';
+    else if (headingLikeText(text)) block.type = 'heading';
     else if ((fontSize > medianSize * 1.18 || block.bold) && text.length < 140 && !/[.!?]$/.test(text)) block.type = 'heading';
     else if (/^(?:\d+[.)]|[*†‡])\s+/.test(text) && box.y > pageHeight * .72 && fontSize < medianSize * .95) block.type = 'footnote';
     else if (/^(?:def |class |function |import |const |let |var |#include\b)/.test(text) || (/monospace|courier/i.test(group[0].runs[0]?.font) && text.length > 8)) block.type = 'code';
@@ -153,8 +158,9 @@ function makeTextBlocks(lines, page, pageWidth, pageHeight, medianSize) {
     const previous = group.at(-1);
     const gap = previous ? line.box.y - (previous.box.y + previous.box.h) : 0;
     const sameColumn = previous && Math.abs(line.box.x - previous.box.x) < Math.max(18, medianSize * 2);
-    const isShortDistinct = line.text.length < 80 && (line.bold || line.fontSize > medianSize * 1.18);
-    if (previous && (gap > Math.max(8, medianSize * .9) || gap < -medianSize || !sameColumn || isShortDistinct || /^table\s+\d+|^fig(?:ure)?\.?\s+\d+/i.test(line.text))) flush();
+    const isShortDistinct = line.text.length < 80 && (line.bold || line.fontSize > medianSize * 1.18 || headingLikeText(line.text));
+    if (previous && (gap > Math.max(8, medianSize * .9) || gap < -medianSize || !sameColumn ||
+      isShortDistinct || headingLikeText(previous.text) || /^table\s+\d+|^fig(?:ure)?\.?\s+\d+/i.test(line.text))) flush();
     group.push(line);
   }
   flush();
@@ -207,6 +213,22 @@ function detectTables(lines, page, medianSize) {
 }
 
 function postProcess(pages) {
+  const first = pages[0];
+  if (first) {
+    for (let index = 1; index < first.blocks.length; index++) {
+      const previous = first.blocks[index - 1], current = first.blocks[index];
+      if (previous.type !== 'title' || current.type !== 'title' ||
+        current.bbox.y - (previous.bbox.y + previous.bbox.h) > Math.max(previous.fontSize, current.fontSize) * 1.4) continue;
+      previous.text = `${previous.text} ${current.text}`;
+      previous.bbox = previous.bounds = union([previous.bbox, current.bbox]);
+      previous.sourceObjectIds.push(...current.sourceObjectIds);
+      first.blocks.splice(index--, 1);
+    }
+    const abstract = first.blocks.findIndex(block => block.type === 'heading' && /^abstract$/i.test(block.text));
+    if (abstract >= 0) for (const block of first.blocks.slice(0, abstract)) {
+      if (block.type === 'heading') block.type = 'body';
+    }
+  }
   const repeated = new Map();
   for (const page of pages) for (const block of page.blocks.filter(b => ['header', 'footer'].includes(b.type))) {
     const key = block.text.toLowerCase().replace(/\d+/g, '#');
@@ -226,6 +248,58 @@ function postProcess(pages) {
   }
 }
 
+async function buildPage(source, number, detections = [], cached = null) {
+  const viewport = source.getViewport({ scale: 1 });
+  const content = cached ? null : await readTextContent(source);
+  const runs = cached?.runs || textRuns(content, viewport, number);
+  const lines = cached?.lines || toLines(runs, viewport.width);
+  // Tiny labels inside a figure or montage can outnumber the page's real
+  // prose lines. Estimate body size from substantial lines first.
+  const substantialLines = lines.filter(line => line.box.w > viewport.width * .22);
+  const medianSize = cached?.medianSize ||
+    (substantialLines.length >= Math.max(5, lines.length * .25) ? median(substantialLines.map(line => line.fontSize)) : 0) ||
+    median(lines.map(line => line.fontSize)) || 12;
+  const operators = cached ? null : await source.getOperatorList();
+  const imageBoxes = cached?.imageBoxes || imageRegions(operators, viewport);
+  const deterministic = detectSourceRegions({ lines, imageBoxes, page: number,
+    width: viewport.width, height: viewport.height, medianSize });
+  const proposed = mergeDetectedRegions(deterministic, detections, lines, number);
+  const { regions, proseRuns } = reconcileRegions(proposed, runs);
+  const proseLines = toLines(proseRuns, viewport.width);
+  const proseBlocks = makeTextBlocks(readingOrder(proseLines, viewport.width, viewport.height),
+    number, viewport.width, viewport.height, medianSize);
+  const needsInference = needsLayoutInference({ lines, imageBoxes, width: viewport.width, height: viewport.height });
+  return { number, width: viewport.width, height: viewport.height,
+    blocks: orderRegions([...regions, ...proseBlocks], viewport.width, viewport.height),
+    regions, source,
+    needsLayoutInference: needsInference,
+    layoutInput: needsInference && !detections.length ? { runs, lines, medianSize, imageBoxes } : null,
+    usableCharacters: runs.reduce((sum, run) => sum + run.text.trim().length, 0) };
+}
+
+export async function refinePdfPage(model, number, detections) {
+  const page = model.pages[number - 1];
+  if (!page || !detections.length) return false;
+  const refined = await buildPage(page.source, number, detections, page.layoutInput);
+  page.blocks = refined.blocks;
+  page.regions = refined.regions;
+  page.layoutInput = null;
+  postProcess(model.pages);
+  return true;
+}
+
+export async function refineComplexPages(model, onRefined = () => {}, stillCurrent = () => true) {
+  for (const page of model.pages) {
+    if (!stillCurrent()) return;
+    if (!page.needsLayoutInference) continue;
+    const result = await detectPageLayout(page.source, page.width, page.height);
+    if (!stillCurrent()) return;
+    if (result.error) { onRefined(page.number, result); return; }
+    const refined = await refinePdfPage(model, page.number, result.regions);
+    onRefined(page.number, { ...result, refined });
+  }
+}
+
 export async function openPdf(data, onProgress = () => {}) {
   // PDF.js may transfer and detach its input buffer to a worker. Preserve the
   // caller's authoritative bytes for review/export and source integrity.
@@ -235,20 +309,10 @@ export async function openPdf(data, onProgress = () => {}) {
     const pages = [];
     let usableCharacters = 0;
     for (let number = 1; number <= pdf.numPages; number++) {
-    const source = await pdf.getPage(number);
-    const viewport = source.getViewport({ scale: 1 });
-    const content = await readTextContent(source);
-    const runs = textRuns(content, viewport, number);
-    usableCharacters += runs.map(run => run.text.trim().length).reduce((a, b) => a + b, 0);
-    const lines = toLines(runs, viewport.width);
-    const medianSize = median(lines.map(l => l.fontSize)) || 12;
-    const operators = await source.getOperatorList();
-    const proposed = detectSourceRegions({ lines, imageBoxes: imageRegions(operators, viewport), page: number, width: viewport.width, height: viewport.height, medianSize });
-    const { regions, proseRuns } = reconcileRegions(proposed, runs);
-    const proseLines = toLines(proseRuns, viewport.width);
-    const proseBlocks = makeTextBlocks(readingOrder(proseLines, viewport.width, viewport.height), number, viewport.width, viewport.height, medianSize);
-    const ordered = orderRegions([...regions, ...proseBlocks], viewport.width, viewport.height);
-    pages.push({ number, width: viewport.width, height: viewport.height, blocks: ordered, regions, source });
+    const page = await buildPage(await pdf.getPage(number), number);
+    usableCharacters += page.usableCharacters;
+    delete page.usableCharacters;
+    pages.push(page);
     onProgress(number, pdf.numPages);
     }
     postProcess(pages);
@@ -261,6 +325,11 @@ export async function openPdf(data, onProgress = () => {}) {
 
 export function speechText(block) {
   return clean(block.text.replace(citationPattern, '')).replace(/\s+([.,;:!?])/g, '$1');
+}
+
+export function equationSpeechText(block, policy = 'skip') {
+  if (block.type !== 'equation' || policy !== 'announce') return '';
+  return block.equationNumber ? `Equation ${block.equationNumber}` : 'Equation';
 }
 
 export function citationsIn(text) {

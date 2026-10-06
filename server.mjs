@@ -14,7 +14,8 @@ const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json',
-  '.mjs': 'text/javascript; charset=utf-8'
+  '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm',
+  '.onnx': 'application/octet-stream'
 };
 function requestedOrigin(requestUrl) {
   try {
@@ -27,9 +28,11 @@ function requestedOrigin(requestUrl) {
 }
 function contentSecurityPolicy(origin) {
   return [
-    "default-src 'none'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+    "default-src 'none'", "script-src 'self' 'wasm-unsafe-eval'", "style-src 'self' 'unsafe-inline'",
     "font-src 'self'", "img-src 'self' data: blob:",
-    `connect-src ${origin ? `'self' ${origin}` : "'none'"}`,
+    // Browser-local layout inference fetches only bundled same-origin weights
+    // and WASM. The server remains GET/HEAD-only and has no document endpoint.
+    `connect-src ${origin ? `'self' ${origin}` : "'self'"}`,
     "worker-src 'self' blob:", `frame-src ${origin || "'none'"}`,
     "base-uri 'none'", "form-action 'self'", "object-src 'none'"
   ].join('; ');

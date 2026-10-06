@@ -59,6 +59,26 @@ running header. Every non-prose region must have a PDF-space source anchor.
 
 ### Reading, review and privacy acceptance
 
+### Real-use interaction regressions added 7 Oct 2026
+
+These behaviours were reported from actual use and must be verified before
+acceptance. A dictionary lookup is an independent side channel; it cannot
+change speech position, playback, source anchor or speech-follow ruler. Each
+pane owns its own viewport ruler position and scrolling. Sentence and word
+highlight colours are independent profile settings.
+
+| IDs | Expected behaviour and fixture | Forbidden change | Permanent test |
+| --- | --- | --- | --- |
+| DICT-004…012 | Synthetic local PDF with visible `.word` spans: one click starts sentence speech once after click arbitration; double click opens local definition immediately; active/stopped TTS, `speechIndex`, selected source anchor and ruler speech target remain unchanged; drag selection still exposes Define; closing the panel preserves state. | First click of a double click starting/restarting TTS or moving the source anchor. | `test/mobile-ui.test.mjs` browser event regression. |
+| RULER-001…014 | Synthetic PDF in desktop dual panes and phone source drawer: both viewport rulers render in the same mode/colour/opacity/size, hold independent positions while either pane scrolls, have separate drags and phone grips; speech-follow maps the active sentence to its PDF source box; Off hides both; settings, zoom and navigation retain correct placement. | One pane's drag or scroll moving the other ruler; source ruler intercepting document scroll. | `test/mobile-ui.test.mjs` browser geometry, pointer and source-anchor regression; real iPad/iPhone touch checks. |
+| HIGHLIGHT-001…008 | Active sentence and current word use separate CSS variables. Changing either setting updates only its own active highlight. Saved and exported/imported profiles round-trip word colour; version-1 files without the new key import with the documented default. | Old profile rejection or a word-colour change altering sentence colour. | `test/v2-profile.test.mjs` and browser style regression. |
+| ANNOT-028 | On tablet and desktop, a completed pen stroke remains visible and in the annotation list after selection changes; palm contacts during stylus drawing do not scroll or discard it. | Pointer cancellation silently deleting the stroke. | `test/mobile-ui.test.mjs`; actual iPad Pencil/finger check pending. |
+
+The tests must be written before the corresponding implementation. Existing
+WordNet data and the established single-click sentence speech action remain
+the source of truth; no cloud dictionary or redundant paragraph-focus mode is
+introduced.
+
 | Requirement | Acceptance criterion | Permanent verification |
 | --- | --- | --- |
 | FOCUS-001 and PROGRESS-001 | Focus enters/exits without losing reading/source/TTS/ruler/profile position; logical stream percentage and page indicator stay correct at phone/tablet/desktop sizes. | Browser regression plus real devices. |
@@ -96,16 +116,37 @@ merge only after automated tests, dependency audit, real iPad Safari and real
 iPhone Safari, and external PDF interoperability checks have passed. Record
 unavailable device/app checks as pending, never as passes.
 
-**Interim V2 result, 6 Oct 2026:** The generated V2-STRUCT-001 composite
-fixture now passes exact sequence, graph-label/table-cell/equation suppression,
-source bounds and immutable input bytes. LAYOUT-004/005 mixed bands,
-HEAD-001/004/005/011/012/013 hierarchy, PROFILE-001 round trip,
-DICT-001/002/003 local lookup/selection, and browser Focus/Progress checks
-also pass. `npm test` passes 14/14 in the development browser, including the
-existing mobile suite; `npm run build` passes. These are the tested subset of
-the matrix, not V2 release acceptance. Region detection is currently
-deterministic; browser-local ML inference, broader structural fixtures, Review
-Mode/export, neural TTS and real-device checks are pending.
+**Interim V2 result, 6 Oct 2026:** V2-STRUCT-001 passes exact sequence,
+graph-label/table-cell/equation suppression, source bounds and immutable bytes.
+LAYOUT-004/005 mixed bands, HEAD-001/004/005/011/012/013 hierarchy,
+PROFILE-001, DICT-001/002/003 and browser Focus/Progress checks pass.
+FIGURE-002/003/004/010 verifies that a model-proposed vector graph owns axis
+and tick labels, while adjacent caption and prose remain readable. LAYOUT-ML-001
+through 005 cover inference gating, class-to-PDF coordinate mapping, local
+runtime loading, conservative reconciliation and ownership. The browser-local
+PP-DocLayout-S ONNX/WASM runtime passes the production CSP browser test.
+
+The current Review Mode browser test covers separate desktop/tablet authoring,
+phone navigation without precision tools, pen drawing, list navigation, undo,
+redo and visibility. The PDF export suite covers ANNOT-001…004, 006/007,
+009/010…024, 026/027 to varying depths; see individual assertions before
+claiming full acceptance. Standard PDF annotations and source text are
+preserved on PDF.js reopening. Preview and Acrobat checks remain pending.
+
+Headless Edge production measurement on a synthetic visual page: ONNX model
+4,917,852 bytes; WASM initialization 169 ms; page inference 94 ms; JavaScript
+heap approximately 17.1 MB after inference. The synthetic page yielded zero ML
+regions, so deterministic source extraction remained authoritative. Runtime
+measurements on representative academic PDFs, large-document memory and real
+iPad Safari are still needed. The dictionary data chunk is 1,367,750 bytes
+(433 KB gzip); the offline WASM CPU binary is 14.2 MB. Optional WebGPU assets
+are shipped separately and loaded only on a supported path.
+
+The fixture matrix above is a target contract, not a claim that every listed
+case is implemented. Remaining release gates include the broader named PDF
+fixture corpus, equation speech policy, optional local neural TTS decision,
+full annotation authoring/export cases, external PDF viewer checks, and real
+iPad/iPhone Safari testing. The user will perform those device checks later.
 
 ## Mobile UI acceptance — `mobile-ui` branch
 

@@ -5,10 +5,10 @@ function escape(text) {
   return text.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
 }
 
-export function pdfFixture(lines, { image = false } = {}) {
+export function pdfFixture(lines, { image = false, graphics = '' } = {}) {
   const commands = lines.map(({ x, y, text, size = 12 }) =>
     `BT /F1 ${size} Tf 1 0 0 1 ${x} ${y} Tm (${escape(text)}) Tj ET`
-  ).join('\n') + (image ? '\nq 160 0 0 100 60 400 cm /Im1 Do Q' : '');
+  ).join('\n') + (image ? '\nq 160 0 0 100 60 400 cm /Im1 Do Q' : '') + (graphics ? `\n${graphics}` : '');
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -111,3 +111,53 @@ export const v2HierarchyPdf = () => pdfFixture([
   { x: 50, y: 449, text: 'Results prose remains body text.' },
   { x: 300, y: 20, text: '1', size: 9 }
 ]);
+
+// Vector graph: no raster-image operator is present. Its labels require a
+// layout proposal to establish one authoritative visual source region.
+export const v2VectorGraphPdf = () => pdfFixture([
+  { x: 50, y: 747, text: 'Vector Graph Study', size: 22 },
+  { x: 50, y: 690, text: 'Prose before the graph.' },
+  { x: 82, y: 530, text: 'Accuracy', size: 9 },
+  { x: 120, y: 455, text: 'Control', size: 9 },
+  { x: 205, y: 455, text: 'Treatment', size: 9 },
+  { x: 75, y: 420, text: '0.2', size: 9 },
+  { x: 75, y: 500, text: '0.6', size: 9 },
+  { x: 50, y: 375, text: 'Figure 2. Synthetic vector graph.' },
+  { x: 50, y: 330, text: 'Prose after the graph.' }
+], { graphics: 'q 0.2 w 80 405 m 80 550 l 285 550 l S 80 420 m 240 525 l S Q' });
+
+// First-page metadata and a dense small-font figure must not make ordinary
+// abstract lines look like headings or turn affiliations into a source table.
+export const v2BodyScalePdf = () => pdfFixture([
+  { x: 50, y: 750, text: 'A Realistic Paper Title', size: 20 },
+  ...[690, 674, 658].flatMap((y, row) => [
+    { x: 60, y, text: ['Ada Example', 'Institute One', 'ada@example.org'][row], size: 9 },
+    { x: 245, y, text: ['Ben Sample', 'Institute Two', 'ben@example.org'][row], size: 9 },
+    { x: 415, y, text: ['Cia Test', 'Institute Three', 'cia@example.org'][row], size: 9 }
+  ]),
+  { x: 50, y: 610, text: 'ABSTRACT', size: 11 },
+  ...Array.from({ length: 8 }, (_, index) => ({ x: 50, y: 587 - index * 12,
+    text: `This abstract sentence ${index + 1} remains ordinary academic prose.`, size: 9 })),
+  ...Array.from({ length: 22 }, (_, index) => ({ x: 70 + index % 5 * 25, y: 470 - Math.floor(index / 5) * 10,
+    text: `t${index}`, size: 4 }))
+], { image: true });
+
+export const v2TitleHeadingsPdf = () => pdfFixture([
+  { x: 50, y: 750, text: 'A Study of Source-Faithful', size: 20 },
+  { x: 120, y: 727, text: 'Academic Reading', size: 20 },
+  { x: 50, y: 690, text: 'Ada Example', size: 12 },
+  { x: 50, y: 660, text: 'ABSTRACT', size: 11 },
+  { x: 50, y: 640, text: 'This sentence is abstract prose.', size: 9 },
+  { x: 50, y: 610, text: '2 RELATED WORK', size: 9 },
+  { x: 50, y: 585, text: 'This sentence belongs to related work.', size: 9 }
+]);
+
+export const v2DenseVectorFigurePdf = () => pdfFixture([
+  { x: 50, y: 750, text: 'Dense Vector Figure Study', size: 20 },
+  ...Array.from({ length: 6 }, (_, i) => ({ x: 50, y: 680 - i * 23, text: `Left prose ${i + 1} remains readable.` })),
+  ...Array.from({ length: 18 }, (_, i) => ({ x: 330 + i % 3 * 75, y: 670 - Math.floor(i / 3) * 28,
+    text: `Panel label ${i + 1}`, size: 4 })),
+  { x: 335, y: 520, text: 'AIRPORT SKETCH', size: 9 },
+  { x: 325, y: 400, text: 'Figure 1. Dense source montage.' },
+  { x: 325, y: 365, text: 'Right prose continues after the figure.' }
+], { graphics: 'q 0.2 w 325 490 m 560 490 l 560 690 l S Q' });

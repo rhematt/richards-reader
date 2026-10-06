@@ -1,4 +1,4 @@
-import { containsCenter, union } from './geometry.js';
+import { containsCenter, overlapFraction, union } from './geometry.js';
 
 const median = values => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -25,6 +25,28 @@ export function detectSourceRegions({ lines, imageBoxes, page, width, height, me
   }
 
   const available = () => lines.filter(line => line.runs.every(run => !claimed.has(run.id)));
+  // Some academic figures are vector montages of other document pages. Their
+  // tiny extractable labels have no image operator, but a nearby caption and
+  // dense microtext establish a visual region in one column.
+  for (const caption of available().filter(line => /^fig(?:ure)?\.?\s*\d+[.:\s]/i.test(line.text))) {
+    const columnLeft = caption.box.x - 24;
+    const candidates = available().filter(line => line !== caption &&
+      line.box.x + line.box.w / 2 >= columnLeft &&
+      line.box.y < caption.box.y - 6 && line.box.y > caption.box.y - height * .48);
+    const tiny = candidates.filter(line => line.fontSize < medianSize * .72);
+    if (tiny.length < 5) continue;
+    const top = Math.max(0, Math.min(...tiny.map(line => line.box.y)) - 6);
+    const left = Math.max(0, Math.min(caption.box.x, ...tiny.map(line => line.box.x)) - 8);
+    const right = Math.min(width, Math.max(caption.box.x + caption.box.w,
+      ...tiny.map(line => line.box.x + line.box.w), caption.box.x + width * .38) + 8);
+    const box = { x: left, y: top, w: right - left, h: caption.box.y - top - 5 };
+    const members = candidates.filter(line => containsCenter(box, line.box));
+    if (members.length < 5) continue;
+    add({ id: `p${page}-v${regions.length}`, type: 'image', page, bbox: box, bounds: box,
+      text: 'Figure or graph from source', sourceObjectIds: ids(members),
+      confidence: 'dense vector figure adjacent to caption' });
+  }
+
   const candidates = available().map(line => ({
     line,
     cells: line.runs.filter(run => run.text.trim()).map(run => ({ text: clean(run.text), x: run.x }))
@@ -33,10 +55,14 @@ export function detectSourceRegions({ lines, imageBoxes, page, width, height, me
   let rows = [];
   const finish = () => {
     if (rows.length >= 3) {
+      const box = union(rows.map(row => row.line.box));
+      // Author names, affiliations and addresses often form three aligned
+      // first-page rows. Their position under the title disambiguates them
+      // from a data table; retain their exact text in the prose projection.
+      if (page === 1 && box.y < height * .24) { rows = []; return; }
       const count = median(rows.map(row => row.cells.length));
       const columns = Array.from({ length: count }, (_, index) => median(rows.map(row => row.cells[index]?.x).filter(Number.isFinite)));
       const regular = rows.every(row => row.cells.length === count && row.cells.every((cell, index) => Math.abs(cell.x - columns[index]) < Math.max(12, medianSize * 1.2)));
-      const box = union(rows.map(row => row.line.box));
       add({ id: `p${page}-t${regions.length}`, page, type: 'table', bbox: box, bounds: box,
         text: rows.map(row => row.cells.map(cell => cell.text).join(' | ')).join('\n'),
         rows: regular ? rows.map(row => row.cells.map(cell => cell.text)) : null,
@@ -77,6 +103,54 @@ export function detectSourceRegions({ lines, imageBoxes, page, width, height, me
     add({ id: `p${page}-f${regions.length}`, page, type,
       bbox: line.box, bounds: line.box, text: line.text,
       sourceObjectIds: ids([line]), confidence: 'page furniture geometry' });
+  }
+  return regions;
+}
+
+// A detector proposes boundaries; PDF objects remain the final authority for
+// ownership. Its generic classes are translated here, outside the document
+// model, so changing model weights does not change Reader's source schema.
+export function mergeDetectedRegions(sourceRegions, detections, lines, page) {
+  const regions = sourceRegions.map(region => ({ ...region, sourceObjectIds: [...region.sourceObjectIds] }));
+  const protectedTypes = new Set(['image', 'table', 'equation', 'header', 'footer', 'page_number']);
+  for (const detection of detections) {
+    if (!protectedTypes.has(detection.type) || detection.confidence < .75) continue;
+    const box = detection.bounds;
+    const matching = regions.find(region => region.type === detection.type &&
+      (overlapFraction(region.bbox, box) > .5 || overlapFraction(box, region.bbox) > .5));
+    const overlapsOther = regions.some(region => region !== matching && protectedTypes.has(region.type) &&
+      (overlapFraction(region.bbox, box) > .55 || overlapFraction(box, region.bbox) > .55));
+    if (overlapsOther) continue;
+    const members = lines.filter(line => containsCenter(box, line.box, 0) &&
+      !regions.some(region => region !== matching && region.sourceObjectIds.some(id => line.runs.some(run => run.id === id))));
+    if (!matching && !members.length) continue;
+    if (!matching && detection.type === 'equation' && !members.some(line => /[=∑∫√≈≤≥()\[\]{}]/u.test(line.text))) continue;
+    if (!matching && detection.type === 'table' && members.length < 2 && detection.confidence < .9) continue;
+    if (!matching && detection.type === 'image' && box.w < 45 && box.h < 35) continue;
+    const equationNumberLine = detection.type === 'equation' ? lines.find(line =>
+      !members.includes(line) && /^\(\d+[a-z]?\)$/.test(line.text) &&
+      members.some(member => Math.abs(member.box.y - line.box.y) <= Math.max(member.box.h, line.box.h)) &&
+      !regions.some(region => region !== matching && region.sourceObjectIds.some(id => line.runs.some(run => run.id === id)))) : null;
+    if (equationNumberLine) members.push(equationNumberLine);
+    const ids = members.flatMap(line => line.runs.map(run => run.id));
+    const regionBox = equationNumberLine ? union([box, equationNumberLine.box]) : box;
+    if (matching) {
+      matching.sourceObjectIds = [...new Set([...matching.sourceObjectIds, ...ids])];
+      matching.bbox = matching.bounds = union([matching.bbox, regionBox]);
+      if (equationNumberLine) {
+        matching.equationNumber = equationNumberLine.text.slice(1, -1);
+        matching.text = `Equation ${matching.equationNumber}`;
+      }
+      matching.confidence = `${matching.confidence}; ${detection.source || 'local layout model'} ${detection.confidence.toFixed(2)}`;
+    } else regions.push({
+      id: `p${page}-ml${regions.length}`, page, type: detection.type,
+      bbox: regionBox, bounds: regionBox, sourceObjectIds: ids,
+      rows: null, equationNumber: equationNumberLine?.text.slice(1, -1) || null,
+      text: detection.type === 'equation' ? `Equation${equationNumberLine ? ` ${equationNumberLine.text.slice(1, -1)}` : ''}` :
+        detection.type === 'table' ? 'Source table' :
+        detection.type === 'image' ? 'Figure or image from source' : members.map(line => line.text).join(' '),
+      confidence: `${detection.source || 'local layout model'} ${detection.confidence.toFixed(2)}`
+    });
   }
   return regions;
 }

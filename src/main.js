@@ -1,8 +1,12 @@
 import './style.css';
-import { openPdf, citationsIn, speechText } from './model.js';
+import { openPdf, refineComplexPages, citationsIn, speechText, equationSpeechText } from './model.js';
 import { buildOutline, flattenOutline } from './layout/outline.js';
-import { PROFILE_SETTING_IDS, exportProfile, importProfile } from './profile.js';
+import { layoutDetectorStatus } from './layout/detector.js';
+import { PROFILE_SETTING_IDS, WORD_HIGHLIGHT_DEFAULT, exportProfile, importProfile } from './profile.js';
 import { defineWord } from './dictionary/index.js';
+import { createClickArbiter } from './dictionary/click-arbitration.js';
+import { AnnotationStore, screenToPdfPoint } from './review/annotations.js';
+import { drawAnnotations } from './review/overlay.js';
 
 const $ = id => document.getElementById(id);
 const sourceScroll = $('source-scroll');
@@ -14,19 +18,32 @@ const mobileMedia = window.matchMedia('(max-width: 700px), (max-width: 950px) an
 const isMobile = () => mobileMedia.matches;
 const settingsIds = PROFILE_SETTING_IDS;
 const presets = {
-  paper: { 'background-color': '#fffdf8', 'text-color': '#26312e', 'ruler-color': '#f5d366', 'highlight-color': '#ffe18a' },
-  dark: { 'background-color': '#182321', 'text-color': '#edf3eb', 'ruler-color': '#577e80', 'highlight-color': '#5c6846' },
-  cream: { 'background-color': '#f8eed8', 'text-color': '#352e25', 'ruler-color': '#eabf73', 'highlight-color': '#f3d88e' }
+  paper: { 'background-color': '#fffdf8', 'text-color': '#26312e', 'ruler-color': '#f5d366', 'highlight-color': '#ffe18a', 'word-highlight-color': WORD_HIGHLIGHT_DEFAULT },
+  dark: { 'background-color': '#182321', 'text-color': '#edf3eb', 'ruler-color': '#577e80', 'highlight-color': '#b7a961', 'word-highlight-color': '#e6a65b' },
+  cream: { 'background-color': '#f8eed8', 'text-color': '#352e25', 'ruler-color': '#eabf73', 'highlight-color': '#f3d88e', 'word-highlight-color': '#eab66e' }
 };
 const state = {
   model: null, mode: 'local', zoom: 1, currentPage: 1, selected: null,
   searchMatches: [], matchIndex: -1, speechItems: [], speechIndex: 0,
   speaking: false, paused: false, voice: null, localVoices: [],
   bookmarks: [], docKey: null, sourceObserver: null, cropObserver: null, renderTasks: new Map(),
-  lastManualSource: 0, lastManualReader: 0, lastProgrammatic: 0, rulerY: null,
-  generation: 0, fetchController: null, mobileReaderPosition: 0
+  lastManualSource: 0, lastManualReader: 0, lastProgrammatic: 0, rulerY: null, sourceRulerY: null,
+  generation: 0, fetchController: null, mobileReaderPosition: 0,
+  originalPdfBytes: null, documentName: 'document.pdf', selectedAnnotation: null, reviewDraft: null,
+  pendingLayoutRefresh: false, layoutMetrics: [], reviewTouchScroll: null,
+  activePenPointer: null, lastPenAt: 0
 };
+const reviewStore = new AnnotationStore();
 let selectedDefinitionWord = '';
+// Read-only operational measurements contain no source or annotation content.
+window.readerDiagnostics = Object.freeze({
+  get layoutMetrics() { return state.layoutMetrics.map(item => ({ ...item })); },
+  get layoutError() { return state.layoutError || null; },
+  get pendingLayoutPages() { return state.model?.pages.filter(page => page.needsLayoutInference).map(page => page.number) || []; },
+  get layoutStarted() { return !!state.layoutStarted; },
+  get layoutStage() { return layoutDetectorStatus(); },
+  get interaction() { return { speechIndex: state.speechIndex, speaking: state.speaking, paused: state.paused, selectedId: state.selected?.id || null, rulerY: state.rulerY, sourceRulerY: state.sourceRulerY }; }
+});
 
 function toast(message, duration = 4500) {
   $('toast').textContent = message;
@@ -47,7 +64,7 @@ function restoreSettings(values) {
   }
   applySettings();
 }
-function applySettings() {
+function applySettings(rerender = true) {
   const style = readerContent.style;
   const family = { Atkinson: "'Atkinson Hyperlegible'", OpenDyslexic: 'OpenDyslexic', Lexend: 'Lexend', system: 'system-ui', serif: 'Georgia' }[setting('font-family')];
   style.setProperty('--reader-font', family);
@@ -63,10 +80,11 @@ function applySettings() {
   document.documentElement.style.setProperty('--reader-text', setting('text-color'));
   document.documentElement.style.setProperty('--ruler-color', setting('ruler-color'));
   document.documentElement.style.setProperty('--highlight-color', setting('highlight-color'));
+  document.documentElement.style.setProperty('--word-highlight-color', setting('word-highlight-color'));
   document.documentElement.style.setProperty('--ruler-opacity', `${setting('ruler-opacity')}%`);
   document.documentElement.style.setProperty('--dim-opacity', Number(setting('dim-level')) / 100);
   localStorage.setItem('reader:preferences:v1', JSON.stringify(settingSnapshot()));
-  if (state.model) { renderAccessible(); updateSearch(); updateRuler(); }
+  if (state.model) { if (rerender) { renderAccessible(); updateSearch(); } updateRuler(); }
 }
 function loadProfiles() {
   const profiles = JSON.parse(localStorage.getItem('reader:profiles:v1') || '{}');
@@ -94,12 +112,25 @@ function fileKey(file) {
 }
 async function closeDocument() {
   state.generation++;
+  state.pendingLayoutRefresh = false;
+  state.layoutMetrics = [];
+  state.layoutError = null;
+  state.layoutStarted = false;
   state.fetchController?.abort();
   state.fetchController = null;
   stopSpeech();
   state.sourceObserver?.disconnect();
   state.cropObserver?.disconnect();
   closeMobileOriginal();
+  setReviewMode(false);
+  reviewStore.clear();
+  state.originalPdfBytes = null;
+  state.selectedAnnotation = null;
+  state.reviewDraft = null;
+  state.reviewTouchScroll = null;
+  state.activePenPointer = null;
+  $('annotation-panel').hidden = true;
+  $('review-mode-button').disabled = true;
   document.body.classList.remove('document-open');
   for (const task of state.renderTasks.values()) task.cancel();
   state.renderTasks.clear();
@@ -141,11 +172,13 @@ async function open(target) {
       if (!/\.pdf$/i.test(target.name) && target.type !== 'application/pdf') throw new Error('Choose a PDF file.');
       modeStatus('local');
       state.docKey = fileKey(target);
+      state.documentName = target.name;
       const bytes = new Uint8Array(await target.arrayBuffer());
       await openPdfBytes(bytes, generation);
     } else {
       modeStatus('url');
       const url = new URL(target);
+      state.documentName = decodeURIComponent(url.pathname.split('/').pop() || 'document.pdf');
       if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Only http and https URLs are supported.');
       toast('Fetching the requested URL in this browser…');
       state.fetchController = new AbortController();
@@ -174,6 +207,8 @@ async function openPdfBytes(bytes, generation) {
   const model = await openPdf(bytes, (page, total) => { $('page-indicator').textContent = `Reading ${page} / ${total}`; });
   if (generation !== state.generation) { await model.task.destroy(); return; }
   state.model = model;
+  state.originalPdfBytes = bytes.slice();
+  $('review-mode-button').disabled = false;
   document.body.classList.add('document-open');
   $('mobile-original-button').disabled = false;
   state.currentPage = 1;
@@ -191,6 +226,42 @@ async function openPdfBytes(bytes, generation) {
   if (!model.usableText) toast('No usable text layer detected. Local OCR support is not yet enabled.', 10000);
   const saved = state.docKey && Number(localStorage.getItem(state.docKey));
   if (saved > 1 && saved <= model.pages.length) setTimeout(() => navigatePage(saved), 200);
+  // The deterministic projection is immediately usable. Complex pages may
+  // improve in the background once the local layout model has loaded.
+  const beginRefinement = () => {
+    state.layoutStarted = true;
+    refineComplexPages(model, (page, result) => {
+      if (state.generation !== generation || state.model !== model) return;
+      if (result.metrics) state.layoutMetrics.push({ page, ...result.metrics });
+      if (result.error) { state.layoutError = result.error; return; }
+      if (!result.refined) return;
+      if (state.speaking) state.pendingLayoutRefresh = true;
+      else refreshAfterLayoutRefinement();
+    }, () => state.generation === generation && state.model === model).catch(error => { state.layoutError = String(error); });
+  };
+  if ('requestIdleCallback' in window) requestIdleCallback(beginRefinement, { timeout: 1800 });
+  else setTimeout(beginRefinement, 100);
+}
+
+function refreshAfterLayoutRefinement() {
+  if (!state.model || state.speaking) return;
+  state.pendingLayoutRefresh = false;
+  const current = currentReadingBlock();
+  const oldElement = current && readerContent.querySelector(`[data-id="${current.id}"]`);
+  const oldTop = oldElement?.getBoundingClientRect().top;
+  const oldScroll = readerScroll.scrollTop;
+  const speechBlock = state.speechItems[state.speechIndex]?.block.id;
+  renderAccessible();
+  refreshHeadings();
+  updateSearch();
+  const replacement = current && state.model.pages[current.page - 1]?.blocks.find(block => block.id === current.id);
+  if (replacement) state.selected = replacement;
+  const newElement = replacement && readerContent.querySelector(`[data-id="${replacement.id}"]`);
+  readerScroll.scrollTop = newElement && oldTop != null ? oldScroll + newElement.getBoundingClientRect().top - oldTop : oldScroll;
+  const speechIndex = state.speechItems.findIndex(item => item.block.id === speechBlock);
+  if (speechIndex >= 0) state.speechIndex = speechIndex;
+  updateReadingProgress();
+  updateRuler();
 }
 
 async function openWebsite(html, url) {
@@ -220,7 +291,20 @@ function renderSource() {
     shell.style.width = `${page.width * state.zoom}px`; shell.style.height = `${page.height * state.zoom}px`;
     const label = document.createElement('span'); label.className = 'page-label'; label.textContent = `Page ${page.number}`;
     shell.append(label);
+    const overlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    overlay.classList.add('review-overlay');
+    overlay.setAttribute('aria-label', `Annotations on page ${page.number}`);
+    shell.append(overlay);
+    overlay.addEventListener('pointerdown', event => startAnnotation(event, page, overlay));
+    overlay.addEventListener('pointermove', event => moveAnnotation(event, page, overlay));
+    overlay.addEventListener('pointerup', event => finishAnnotation(event, page, overlay));
+    overlay.addEventListener('pointercancel', event => cancelAnnotationPointer(event, page, overlay));
+    overlay.addEventListener('lostpointercapture', event => {
+      if (state.reviewDraft?.pointerId === event.pointerId) finishAnnotation(event, page, overlay, true);
+      if (state.reviewTouchScroll?.pointerId === event.pointerId) state.reviewTouchScroll = null;
+    });
     shell.addEventListener('click', event => {
+      if (document.body.classList.contains('review-mode')) return;
       const rect = shell.getBoundingClientRect();
       const x = (event.clientX - rect.left) / state.zoom;
       const y = (event.clientY - rect.top) / state.zoom;
@@ -232,11 +316,187 @@ function renderSource() {
     });
     sourceContent.append(shell);
   }
+  renderOverlays();
   state.sourceObserver?.disconnect();
   state.sourceObserver = new IntersectionObserver(entries => {
     for (const entry of entries) if (entry.isIntersecting) renderPage(Number(entry.target.dataset.page));
   }, { root: sourceScroll, rootMargin: '800px' });
   sourceContent.querySelectorAll('.page-shell').forEach(shell => state.sourceObserver.observe(shell));
+}
+function renderOverlays() {
+  if (!state.model || state.model.website) return;
+  let annotations = reviewStore.visible ? reviewStore.list() : [];
+  if (state.reviewDraft) {
+    if (state.reviewDraft.moving) annotations = annotations.filter(item => item.id !== state.reviewDraft.id);
+    annotations.push(state.reviewDraft.preview);
+  }
+  for (const page of state.model.pages) {
+    const overlay = sourceContent.querySelector(`[data-page="${page.number}"] .review-overlay`);
+    if (overlay) drawAnnotations(overlay, page, annotations, state.zoom, state.selectedAnnotation);
+  }
+}
+function annotationPoint(event, page, overlay) {
+  return screenToPdfPoint(page.source.getViewport({ scale: state.zoom }), overlay.getBoundingClientRect(), event.clientX, event.clientY);
+}
+function translateGeometry(geometry, dx, dy) {
+  const moved = structuredClone(geometry);
+  if (moved.point) { moved.point.x += dx; moved.point.y += dy; }
+  if (moved.rect) for (const key of ['x1', 'x2']) moved.rect[key] += dx;
+  if (moved.rect) for (const key of ['y1', 'y2']) moved.rect[key] += dy;
+  if (moved.paths) for (const path of moved.paths) for (const point of path) { point.x += dx; point.y += dy; }
+  return moved;
+}
+function startAnnotation(event, page, overlay) {
+  if (!document.body.classList.contains('review-mode') || isMobile()) return;
+  if (event.pointerType === 'touch') {
+    // A broad contact, or any contact near a current stylus stroke, is a palm.
+    // An intentional lone finger drag scrolls the original source pane.
+    if (state.activePenPointer != null || Date.now() - state.lastPenAt < 700 ||
+      Math.max(event.width || 0, event.height || 0) > 32) return;
+    state.reviewTouchScroll = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    overlay.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    return;
+  }
+  if (event.button !== 0) return;
+  if (event.pointerType === 'pen') {
+    state.activePenPointer = event.pointerId;
+    state.lastPenAt = Date.now();
+    state.reviewTouchScroll = null;
+  }
+  const point = annotationPoint(event, page, overlay);
+  const tool = $('annotation-tool').value;
+  if (tool === 'select') {
+    const id = event.target.closest('[data-annotation-id]')?.getAttribute('data-annotation-id');
+    state.selectedAnnotation = id || null;
+    const original = id && reviewStore.get(id);
+    if (original) state.reviewDraft = { pointerId: event.pointerId, page: page.number, start: point, id, original,
+      moving: true, preview: original };
+    renderOverlays();
+    return;
+  }
+  event.preventDefault(); event.stopPropagation();
+  if (tool === 'note') {
+    const text = prompt('Comment at this source location:');
+    if (text?.trim()) addReviewAnnotation({ type: 'note', page: page.number,
+      geometry: { point }, text: text.trim().slice(0, 2000) });
+    return;
+  }
+  overlay.setPointerCapture(event.pointerId);
+  const geometry = tool === 'ink' ? { paths: [[point]] } : { rect: { x1: point.x, y1: point.y, x2: point.x, y2: point.y } };
+  state.reviewDraft = { pointerId: event.pointerId, page: page.number, start: point, tool,
+    preview: { id: 'preview', type: tool, page: page.number, geometry,
+      appearance: { color: $('annotation-color').value, width: Number($('annotation-width').value) || 2 } } };
+  renderOverlays();
+}
+function moveAnnotation(event, page, overlay) {
+  if (event.pointerType === 'touch') {
+    const scroll = state.reviewTouchScroll;
+    if (!scroll || scroll.pointerId !== event.pointerId || state.activePenPointer != null) return;
+    sourceScroll.scrollTop += scroll.y - event.clientY;
+    sourceScroll.scrollLeft += scroll.x - event.clientX;
+    scroll.x = event.clientX; scroll.y = event.clientY;
+    event.preventDefault();
+    return;
+  }
+  const draft = state.reviewDraft;
+  if (!draft || draft.pointerId !== event.pointerId || draft.page !== page.number) return;
+  const point = annotationPoint(event, page, overlay);
+  if (draft.moving) draft.preview = { ...draft.original, geometry: translateGeometry(draft.original.geometry, point.x - draft.start.x, point.y - draft.start.y) };
+  else if (draft.tool === 'ink') draft.preview.geometry.paths[0].push(point);
+  else { draft.preview.geometry.rect.x2 = point.x; draft.preview.geometry.rect.y2 = point.y; }
+  renderOverlays();
+}
+function finishAnnotation(event, page, overlay, cancelled = false) {
+  if (event.pointerType === 'touch') {
+    if (state.reviewTouchScroll?.pointerId === event.pointerId) state.reviewTouchScroll = null;
+    return;
+  }
+  if (event.pointerType === 'pen' && state.activePenPointer === event.pointerId) {
+    state.activePenPointer = null;
+    state.lastPenAt = Date.now();
+  }
+  const draft = state.reviewDraft;
+  if (!draft || draft.pointerId !== event.pointerId || draft.page !== page.number) return;
+  event.preventDefault(); event.stopPropagation();
+  if (!cancelled) moveAnnotation(event, page, overlay);
+  state.reviewDraft = null;
+  if (draft.moving) {
+    if (JSON.stringify(draft.preview.geometry) !== JSON.stringify(draft.original.geometry)) reviewStore.update(draft.id, { geometry: draft.preview.geometry });
+  } else {
+    const item = draft.preview;
+    if (item.type === 'freetext') {
+      const text = prompt('Text for this source annotation:');
+      if (!text?.trim()) { renderOverlays(); return; }
+      item.text = text.trim().slice(0, 2000);
+    }
+    if (item.type !== 'ink' && (Math.abs(item.geometry.rect.x2 - item.geometry.rect.x1) < 2 || Math.abs(item.geometry.rect.y2 - item.geometry.rect.y1) < 2)) {
+      renderOverlays(); return;
+    }
+    delete item.id;
+    addReviewAnnotation(item);
+  }
+  renderOverlays(); renderAnnotationList();
+}
+function cancelAnnotationPointer(event, page, overlay) {
+  if (event.pointerType === 'touch') {
+    if (state.reviewTouchScroll?.pointerId === event.pointerId) state.reviewTouchScroll = null;
+    return;
+  }
+  // Safari can cancel a pen stream when a second contact appears. Retain the
+  // last confirmed sample instead of silently discarding the whole stroke.
+  finishAnnotation(event, page, overlay, true);
+}
+function addReviewAnnotation(item) {
+  const created = reviewStore.add({ ...item, sourceAnchor: { page: item.page } });
+  state.selectedAnnotation = created.id;
+  renderOverlays(); renderAnnotationList();
+}
+function renderAnnotationList() {
+  const list = $('annotation-list'); list.replaceChildren();
+  const annotations = reviewStore.list();
+  if (!annotations.length) { list.textContent = 'No session annotations.'; return; }
+  for (const item of annotations) {
+    const entry = document.createElement('div'); entry.className = 'annotation-entry';
+    const title = document.createElement('b'); title.textContent = `${item.type} · page ${item.page}`;
+    const description = document.createElement('div'); description.textContent = item.text || '';
+    const go = document.createElement('button'); go.type = 'button'; go.textContent = 'Go to source'; go.addEventListener('click', () => focusAnnotation(item));
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'annotation-edit'; edit.textContent = 'Edit';
+    edit.addEventListener('click', () => {
+      if (['note', 'freetext'].includes(item.type)) {
+        const text = prompt('Edit annotation text:', item.text || '');
+        if (text === null) return;
+        reviewStore.update(item.id, { text: text.trim().slice(0, 2000) });
+      } else reviewStore.update(item.id, { appearance: { color: $('annotation-color').value, width: Number($('annotation-width').value) || 2 } });
+      renderOverlays(); renderAnnotationList();
+    });
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'annotation-delete'; remove.textContent = 'Delete';
+    remove.addEventListener('click', () => { reviewStore.remove(item.id); if (state.selectedAnnotation === item.id) state.selectedAnnotation = null; renderOverlays(); renderAnnotationList(); });
+    entry.append(title, description, go, edit, remove); list.append(entry);
+  }
+}
+function focusAnnotation(item) {
+  if (!state.model || state.model.website) return;
+  $('annotation-panel').hidden = true;
+  if (isMobile()) openMobileOriginal();
+  state.selectedAnnotation = item.id;
+  renderPage(item.page);
+  renderOverlays();
+  const shell = sourceContent.querySelector(`[data-page="${item.page}"]`);
+  const anchor = item.geometry.point || item.geometry.paths?.[0]?.[0] ||
+    { x: item.geometry.rect.x1, y: item.geometry.rect.y2 };
+  const [, y] = state.model.pages[item.page - 1].source.getViewport({ scale: state.zoom }).convertToViewportPoint(anchor.x, anchor.y);
+  sourceScroll.scrollTo({ top: shell.offsetTop + y - sourceScroll.clientHeight * .35 });
+  state.currentPage = item.page; updatePageIndicator();
+}
+function setReviewMode(enabled) {
+  if (enabled && (isMobile() || !state.model || state.model.website)) return;
+  document.body.classList.toggle('review-mode', enabled);
+  $('review-toolbar').hidden = !enabled;
+  $('review-mode-button').setAttribute('aria-pressed', String(enabled));
+  $('review-mode-button').textContent = enabled ? 'Read mode' : 'Review mode';
+  state.reviewDraft = null;
+  renderOverlays();
 }
 async function renderPage(number) {
   const page = state.model?.pages[number - 1];
@@ -321,10 +581,27 @@ function renderAccessible() {
         });
         element.append(anchor);
       }
+      const clicks = createClickArbiter({
+        onSentence: sentence => {
+          if (!element.isConnected) return;
+          if (sentence) state.speechIndex = state.speechItems.findIndex(item => item.element === sentence);
+          focusBlock(block, 'reader');
+          if (sentence && state.localVoices.length) startSpeech(Math.max(0, state.speechIndex));
+        },
+        onDefine: word => {
+          const token = word.textContent.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
+          if (!/^[\p{L}]{2,24}$/u.test(token)) return;
+          const range = document.createRange(); range.selectNodeContents(word);
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+          showDefinition(token);
+        }
+      });
       element.addEventListener('click', event => {
-        if (event.target.closest('.sentence')) state.speechIndex = state.speechItems.findIndex(item => item.element === event.target.closest('.sentence'));
-        focusBlock(block, 'reader');
-        if (event.target.closest('.sentence') && state.localVoices.length) startSpeech(Math.max(0, state.speechIndex));
+        clicks.click({ sentenceId: event.target.closest('.sentence'), word: event.target.closest('.word'), detail: event.detail });
+      });
+      element.addEventListener('dblclick', event => {
+        event.preventDefault();
+        clicks.doubleClick({ word: event.target.closest('.word') });
       });
       element.addEventListener('keydown', event => { if (event.key === 'Enter') focusBlock(block, 'reader'); });
       readerContent.append(element);
@@ -381,7 +658,12 @@ function collectSpeechItems() {
   const items = [];
   const visibleElements = new Map([...readerContent.querySelectorAll('.block')].map(element => [element.dataset.id, element]));
   for (const block of state.model.pages.flatMap(page => page.blocks)) {
-    if (['image', 'table', 'source_region', 'equation', 'table_source_text'].includes(block.type)) continue;
+    if (block.type === 'equation') {
+      const text = equationSpeechText(block, setting('equation-speech'));
+      if (text) items.push({ block, element: visibleElements.get(block.id) || null, text });
+      continue;
+    }
+    if (['image', 'table', 'source_region', 'table_source_text'].includes(block.type)) continue;
     if (['header', 'footer', 'page_number'].includes(block.type) && !setting('speak-furniture')) continue;
     if (block.type === 'footnote' && !setting('speak-footnotes')) continue;
     if ((block.type === 'endnote' || block.section === 'endnote') && !setting('speak-endnotes')) continue;
@@ -446,6 +728,7 @@ function openMobileOriginal(block = null) {
   if (anchor) focusBlock(anchor, 'reader');
   if (anchor && !state.model.website) renderPage(anchor.page);
   updateRuler();
+  if (state.speaking && setting('speech-follow-ruler')) setTimeout(() => moveSourceRulerToBlock(state.speechItems[state.speechIndex]?.block), 250);
 }
 function closeMobileOriginal({ restore = true } = {}) {
   if (!document.body.classList.contains('mobile-original-open')) return;
@@ -478,7 +761,8 @@ function setFocusMode(enabled) {
   const top = readerScroll.scrollTop;
   document.body.classList.toggle('focus-mode', enabled);
   $('focus-exit').hidden = !enabled;
-  requestAnimationFrame(() => { readerScroll.scrollTop = top; updateRuler(); updateReadingProgress(); });
+  readerScroll.scrollTop = top;
+  updateRuler(); updateReadingProgress();
 }
 function closeSettings() {
   $('settings-panel').hidden = true;
@@ -500,7 +784,8 @@ function updateDefinitionAction() {
   button.style.top = `${Math.min(innerHeight - 55, Math.max(8, rect.bottom + 5))}px`;
   button.hidden = false;
 }
-async function showDefinition() {
+async function showDefinition(word = selectedDefinitionWord) {
+  if (typeof word === 'string') selectedDefinitionWord = word;
   $('define-button').hidden = true;
   const panel = $('dictionary-panel');
   const result = $('dictionary-result');
@@ -568,7 +853,8 @@ function moveSearch(delta) {
 function stopSpeech() {
   speech?.cancel(); state.speaking = false; state.paused = false;
   $('speak-button').textContent = 'Play';
-  readerContent.querySelectorAll('.sentence.active,.word.active').forEach(el => el.classList.remove('active'));
+  readerContent.querySelectorAll('.sentence.active,.word.active,.block.active').forEach(el => el.classList.remove('active'));
+  if (state.pendingLayoutRefresh) refreshAfterLayoutRefinement();
 }
 function refreshVoices() {
   if (!speech) {
@@ -602,11 +888,14 @@ function speakCurrent() {
   if (!item || !state.speaking) { stopSpeech(); return; }
   const voice = state.localVoices[Number($('voice-select').value)] || state.localVoices[0];
   if (!voice || voice.localService !== true) { stopSpeech(); return; }
-  readerContent.querySelectorAll('.sentence.active,.word.active').forEach(el => el.classList.remove('active'));
+  readerContent.querySelectorAll('.sentence.active,.word.active,.block.active').forEach(el => el.classList.remove('active'));
   item.element?.classList.add('active');
   focusBlock(item.block, 'reader', true);
   item.element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  if (item.element && (!isMobile() || setting('speech-follow-ruler'))) setTimeout(() => moveRulerToElement(item.element), 250);
+  if (setting('speech-follow-ruler')) setTimeout(() => {
+    if (item.element) moveRulerToElement(item.element);
+    moveSourceRulerToBlock(item.block);
+  }, 250);
   const utterance = new SpeechSynthesisUtterance(item.text);
   utterance.voice = voice; utterance.lang = voice.lang; utterance.rate = Number($('speech-rate').value) || 1;
   utterance.onboundary = event => {
@@ -614,7 +903,8 @@ function speakCurrent() {
     const count = (item.text.slice(0, event.charIndex).match(/\S+/g) || []).length;
     item.element?.querySelector('.word.active')?.classList.remove('active');
     item.element?.querySelector(`[data-word-index="${count}"]`)?.classList.add('active');
-    if (item.element && (!isMobile() || setting('speech-follow-ruler'))) moveRulerToElement(item.element);
+    if (item.element && setting('speech-follow-ruler')) moveRulerToElement(item.element);
+    if (setting('speech-follow-ruler')) moveSourceRulerToBlock(item.block);
   };
   utterance.onend = () => { if (state.speaking && !state.paused) { state.speechIndex++; speakCurrent(); } };
   utterance.onerror = () => { stopSpeech(); $('speech-status').textContent = 'Device speech stopped'; };
@@ -637,23 +927,40 @@ function moveSpeech(direction, unit) {
 }
 
 function updateRuler() {
-  const mode = setting('ruler-mode'); const ruler = $('ruler');
-  ruler.hidden = mode === 'off'; ruler.classList.toggle('dim', mode === 'dim');
-  if (mode === 'off') return;
+  const mode = setting('ruler-mode');
   const lineHeight = parseFloat(getComputedStyle(readerContent).lineHeight) || 30;
-  ruler.style.height = `${lineHeight * (mode === 'line' ? 1 : Number(setting('ruler-size')))}px`;
-  if (state.rulerY == null) state.rulerY = readerScroll.clientHeight / 2;
-  if (isMobile()) {
-    const rect = readerScroll.getBoundingClientRect();
-    state.rulerY = Math.max(ruler.offsetHeight / 2, Math.min(rect.height - ruler.offsetHeight / 2, state.rulerY));
-    ruler.style.top = `${rect.top + state.rulerY - ruler.offsetHeight / 2}px`;
-  } else ruler.style.top = `${state.rulerY + readerScroll.scrollTop - ruler.offsetHeight / 2}px`;
+  for (const [id, scroll, key, height] of [['ruler', readerScroll, 'rulerY', lineHeight], ['source-ruler', sourceScroll, 'sourceRulerY', 28]]) {
+    const ruler = $(id);
+    ruler.hidden = mode === 'off' || (id === 'source-ruler' && (!state.model || state.model.website));
+    ruler.classList.toggle('dim', mode === 'dim');
+    if (ruler.hidden || !scroll.clientHeight) continue;
+    ruler.style.height = `${height * (mode === 'line' ? 1 : Number(setting('ruler-size')))}px`;
+    if (state[key] == null) state[key] = scroll.clientHeight / 2;
+    const rect = scroll.getBoundingClientRect();
+    state[key] = Math.max(ruler.offsetHeight / 2, Math.min(rect.height - ruler.offsetHeight / 2, state[key]));
+    if (isMobile()) {
+      ruler.style.left = `${rect.left}px`; ruler.style.right = 'auto'; ruler.style.width = `${rect.width}px`;
+      ruler.style.top = `${rect.top + state[key] - ruler.offsetHeight / 2}px`;
+    } else {
+      ruler.style.left = `${scroll.scrollLeft}px`; ruler.style.right = 'auto'; ruler.style.width = `${scroll.clientWidth}px`;
+      ruler.style.top = `${state[key] + scroll.scrollTop - ruler.offsetHeight / 2}px`;
+    }
+  }
 }
 function moveRulerToElement(element) {
   if (setting('ruler-mode') === 'off') return;
   const viewport = readerScroll.getBoundingClientRect();
   const rect = element.getBoundingClientRect();
   state.rulerY = rect.top - viewport.top + Math.min(rect.height / 2, 25);
+  updateRuler();
+}
+function moveSourceRulerToBlock(block) {
+  if (!block?.bbox || setting('ruler-mode') === 'off' || !sourceScroll.clientHeight) return;
+  const shell = sourceContent.querySelector(`[data-page="${block.page}"]`);
+  if (!shell) return;
+  const viewport = sourceScroll.getBoundingClientRect();
+  const page = shell.getBoundingClientRect();
+  state.sourceRulerY = page.top + block.bbox.y * state.zoom - viewport.top + Math.min(block.bbox.h * state.zoom / 2, 25);
   updateRuler();
 }
 
@@ -677,6 +984,7 @@ function setupEvents() {
   $('mobile-menu-button').addEventListener('click', toggleMobileMenu);
   $('mobile-menu-settings').addEventListener('click', openSettings);
   $('mobile-menu-focus').addEventListener('click', () => setFocusMode(true));
+  $('mobile-menu-annotations').addEventListener('click', () => { closeMobileMenu(); renderAnnotationList(); $('annotation-panel').hidden = false; });
   $('mobile-original-close').addEventListener('click', () => closeMobileOriginal());
   $('search-input').addEventListener('input', () => { state.matchIndex = -1; updateSearch(); });
   $('search-previous').addEventListener('click', () => moveSearch(-1));
@@ -687,18 +995,45 @@ function setupEvents() {
   $('settings-button').addEventListener('click', openSettings);
   $('focus-button').addEventListener('click', () => setFocusMode(true));
   $('focus-exit').addEventListener('click', () => setFocusMode(false));
-  $('define-button').addEventListener('click', showDefinition);
+  $('review-mode-button').addEventListener('click', () => setReviewMode(!document.body.classList.contains('review-mode')));
+  $('annotation-tool').addEventListener('change', () => {
+    if ($('annotation-tool').value === 'highlight' && $('annotation-color').value === '#b91c1c') $('annotation-color').value = '#facc15';
+    if ($('annotation-tool').value === 'ink' && $('annotation-color').value === '#facc15') $('annotation-color').value = '#b91c1c';
+  });
+  $('annotation-undo').addEventListener('click', () => { reviewStore.undo(); renderOverlays(); renderAnnotationList(); });
+  $('annotation-redo').addEventListener('click', () => { reviewStore.redo(); renderOverlays(); renderAnnotationList(); });
+  $('annotation-visibility').addEventListener('click', () => {
+    reviewStore.setVisible(!reviewStore.visible);
+    $('annotation-visibility').textContent = reviewStore.visible ? 'Hide marks' : 'Show marks';
+    $('annotation-visibility').setAttribute('aria-pressed', String(reviewStore.visible));
+    renderOverlays();
+  });
+  $('annotation-list-button').addEventListener('click', () => { renderAnnotationList(); $('annotation-panel').hidden = false; });
+  $('annotation-panel-close').addEventListener('click', () => { $('annotation-panel').hidden = true; });
+  $('export-marked').addEventListener('click', async () => {
+    if (!state.originalPdfBytes) return;
+    try {
+      const { exportMarkedPdf } = await import('./review/export.js');
+      const bytes = await exportMarkedPdf(state.originalPdfBytes, reviewStore.list());
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      const link = document.createElement('a'); link.href = url;
+      link.download = `${state.documentName.replace(/\.pdf$/i, '').replace(/[^\w.-]/g, '_')}-marked.pdf`;
+      link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Marked PDF exported. The original was not changed.');
+    } catch (error) { toast(`Could not export marked PDF: ${error.message}`); }
+  });
+  $('define-button').addEventListener('click', () => showDefinition());
   $('dictionary-close').addEventListener('click', () => { $('dictionary-panel').hidden = true; });
   document.addEventListener('selectionchange', updateDefinitionAction);
   $('mobile-settings-button').addEventListener('click', openSettings);
   $('settings-close').addEventListener('click', closeSettings);
   $('preset').addEventListener('change', event => { if (presets[event.target.value]) restoreSettings({ ...settingSnapshot(), ...presets[event.target.value] }); });
-  for (const id of settingsIds.filter(id => id !== 'preset')) $(id).addEventListener('change', () => { if (id.endsWith('-color')) $('preset').value = 'custom'; applySettings(); });
+  for (const id of settingsIds.filter(id => id !== 'preset')) $(id).addEventListener('change', () => { if (id.endsWith('-color')) $('preset').value = 'custom'; applySettings(!id.endsWith('-color') && !['ruler-mode', 'ruler-size', 'ruler-opacity', 'dim-level', 'speech-follow-ruler'].includes(id)); });
   $('save-profile').addEventListener('click', () => { const name = $('profile-name').value.trim().slice(0, 40); if (!name) return toast('Enter a profile name.'); const profiles = loadProfiles(); profiles[name] = settingSnapshot(); localStorage.setItem('reader:profiles:v1', JSON.stringify(profiles)); loadProfiles(); $('saved-profiles').value = name; toast(`Saved profile: ${name}`); });
   $('saved-profiles').addEventListener('change', event => {
     const name = event.target.value;
     const profile = loadProfiles()[name];
-    if (profile) { $('saved-profiles').value = name; restoreSettings(profile); }
+    if (profile) { $('saved-profiles').value = name; restoreSettings({ 'word-highlight-color': WORD_HIGHLIGHT_DEFAULT, 'equation-speech': 'announce', ...profile }); }
   });
   $('export-profile').addEventListener('click', () => {
     const blob = new Blob([exportProfile(settingSnapshot())], { type: 'application/json' });
@@ -727,10 +1062,13 @@ function setupEvents() {
   speech?.addEventListener?.('voiceschanged', refreshVoices);
   readerScroll.addEventListener('pointermove', event => { if (isMobile() || setting('ruler-mode') === 'off') return; state.rulerY = event.clientY - readerScroll.getBoundingClientRect().top; updateRuler(); });
   readerScroll.addEventListener('touchmove', event => { if (isMobile() || setting('ruler-mode') === 'off') return; state.rulerY = event.touches[0].clientY - readerScroll.getBoundingClientRect().top; updateRuler(); }, { passive: true });
-  const grip = $('ruler-grip'); let draggingRuler = false;
-  grip.addEventListener('pointerdown', event => { if (!isMobile()) return; event.preventDefault(); event.stopPropagation(); draggingRuler = true; grip.setPointerCapture(event.pointerId); });
-  grip.addEventListener('pointermove', event => { if (!draggingRuler) return; event.preventDefault(); state.rulerY = event.clientY - readerScroll.getBoundingClientRect().top; updateRuler(); });
-  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) grip.addEventListener(name, () => { draggingRuler = false; });
+  sourceScroll.addEventListener('pointermove', event => { if (isMobile() || document.body.classList.contains('review-mode') || setting('ruler-mode') === 'off') return; state.sourceRulerY = event.clientY - sourceScroll.getBoundingClientRect().top; updateRuler(); });
+  for (const [gripId, scroll, key] of [['ruler-grip', readerScroll, 'rulerY'], ['source-ruler-grip', sourceScroll, 'sourceRulerY']]) {
+    const grip = $(gripId); let dragging = false;
+    grip.addEventListener('pointerdown', event => { if (!isMobile()) return; event.preventDefault(); event.stopPropagation(); dragging = true; grip.setPointerCapture(event.pointerId); });
+    grip.addEventListener('pointermove', event => { if (!dragging) return; event.preventDefault(); state[key] = event.clientY - scroll.getBoundingClientRect().top; updateRuler(); });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) grip.addEventListener(name, () => { dragging = false; });
+  }
   readerScroll.tabIndex = 0;
   readerScroll.addEventListener('keydown', event => { if (['ArrowUp', 'ArrowDown'].includes(event.key) && setting('ruler-mode') !== 'off') { event.preventDefault(); state.rulerY = Math.max(0, Math.min(readerScroll.clientHeight, (state.rulerY || readerScroll.clientHeight / 2) + (event.key === 'ArrowDown' ? 1 : -1) * (parseFloat(getComputedStyle(readerContent).lineHeight) || 30))); updateRuler(); } });
   const divider = $('pane-divider'); let dragging = false;
@@ -740,10 +1078,11 @@ function setupEvents() {
   divider.addEventListener('keydown', event => { if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return; const current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--source-width')) || 50; document.documentElement.style.setProperty('--source-width', `${Math.max(20, Math.min(80, current + (event.key === 'ArrowRight' ? 5 : -5)))}%`); });
   for (const eventName of ['wheel', 'touchstart', 'pointerdown']) { sourceScroll.addEventListener(eventName, () => state.lastManualSource = Date.now(), { passive: true }); readerScroll.addEventListener(eventName, () => state.lastManualReader = Date.now(), { passive: true }); }
   let sourceTimer, readerTimer;
-  sourceScroll.addEventListener('scroll', () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => syncFromSource(), 180); });
+  sourceScroll.addEventListener('scroll', () => { clearTimeout(sourceTimer); sourceTimer = setTimeout(() => syncFromSource(), 180); updateRuler(); });
   readerScroll.addEventListener('scroll', () => { clearTimeout(readerTimer); readerTimer = setTimeout(() => syncFromReader(), 180); updateRuler(); updateReadingProgress(); });
   mobileMedia.addEventListener('change', () => {
     if (!isMobile()) closeMobileOriginal();
+    if (isMobile()) setReviewMode(false);
     if (state.model) renderAccessible();
     updateRuler();
   });

@@ -12,6 +12,8 @@
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "5.3.0",
     "@fontsource/lexend": "5.3.0",
+    "onnxruntime-web": "^1.30.0",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "6.4.299"
   },
   "devDependencies": {
