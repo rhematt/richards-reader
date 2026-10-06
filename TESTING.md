@@ -1,5 +1,34 @@
 # Reader V1 test checklist
 
+## LAN-MDNS-001 — Dynamic `reader.local` registration
+
+Run `npm run build && npm start` on a macOS laptop with a default IPv4 LAN
+route. The launcher must select that route's interface and current IPv4 address,
+bind Reader on `0.0.0.0:4173`, pass a local HTTP health check, register both the
+`reader.local` address record and `Richard's Reader._http._tcp` service, and
+print working localhost, LAN-IP and `reader.local:4173` URLs. A separately
+managed Caddy service may forward port 80 to 4173 for `http://reader.local/`.
+No static IP, privileged Reader process, document endpoint or Caddy subprocess
+is permitted. SIGINT and SIGTERM must remove the Bonjour child and stop Reader.
+
+Automated `test/start-local.test.mjs` checks IP A (`192.168.0.3`) and a changed
+DHCP IP B (`192.168.0.17`) on the same route, a changed route/interface,
+exclusion of VM/VPN interfaces, failure without a routed LAN IPv4, termination
+order, and rejection of a renamed Bonjour service. These are simulated network
+states; they do not change the Mac's real DHCP lease.
+
+**Live Mac result, 6 Oct 2026:** Passed at the Mac's current DHCP address
+on `en0`. The launcher received both `dns-sd` registration
+replies; HEAD requests to `http://reader.local:4173/` and, through the
+separately running Caddy service, `http://reader.local/` returned HTTP 200 with
+the local-mode CSP. On separate SIGTERM and SIGINT runs, the launcher,
+`dns-sd` child and port-4173 listener were absent afterward. A deliberate
+duplicate manual advertisement caused Bonjour to rename the service to
+`Richard's Reader (2)`; the launcher reported that conflict and cleaned up.
+The actual DHCP lease was not changed during this test. After a future lease
+change, stop and restart Reader and confirm the printed LAN IP and
+`reader.local` resolution use the new address.
+
 ## IPAD-PDF-001 — Local PDF opens and extracts on iPadOS
 
 Given Reader loaded over the LAN on an actual iPad, select a normal text-based

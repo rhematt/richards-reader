@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "test": "node --test test/*.test.mjs",
-    "start": "node server.mjs"
+    "start": "node scripts/start-local.mjs"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "5.3.0",

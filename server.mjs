@@ -3,6 +3,10 @@ import { readFile, stat } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
 
 // This process only reads built application files. It never accepts a request body.
+if (process.getuid?.() === 0) {
+  process.stderr.write('Run Reader as your normal user, without sudo.\n');
+  process.exit(1);
+}
 const root = resolve('dist');
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || '0.0.0.0';
@@ -60,10 +64,5 @@ createServer(async (request, response) => {
     response.end(request.method === 'HEAD' ? undefined : body);
   } catch { response.writeHead(404); response.end(); }
 }).listen(port, host, () => {
-  // A privileged launch may bind port 80; return to the invoking user at once.
-  if (process.getuid?.() === 0 && process.env.SUDO_UID && process.env.SUDO_GID) {
-    process.setgid(Number(process.env.SUDO_GID));
-    process.setuid(Number(process.env.SUDO_UID));
-  }
   process.stdout.write(`Reader app files listening on http://${host}:${port}\n`);
 });

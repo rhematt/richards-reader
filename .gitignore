@@ -4,6 +4,7 @@ dist/
 *.log
 .env*
 !.env.example
+Caddyfile
 coverage/
 playwright-report/
 test-results/

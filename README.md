@@ -21,8 +21,16 @@ npm run build
 npm start
 ```
 
-Open `http://localhost:4173/`. The production server binds to `0.0.0.0:4173`
-by default. `PORT` and `HOST` can override these values. Stop it with Ctrl-C.
+On macOS, `npm start` discovers the IPv4 address on the gateway-routed LAN
+interface, starts the static server on `0.0.0.0:4173`, checks it locally, and
+advertises that address as `reader.local` with Bonjour. It prints the current
+localhost and LAN URLs. Stop it with Ctrl-C; the launcher removes its Bonjour
+registration before stopping the server. `PORT` can change the server and
+advertised port together. Do not run `npm start` with `sudo`.
+
+Open `http://localhost:4173/` on the Mac or `http://reader.local:4173/` on
+another LAN device. The port-free `http://reader.local/` also works when a
+separate, persistent port-80 proxy is configured as described below.
 `npm run dev` starts Vite for source development; use the production build and
 `npm start` for privacy testing and routine LAN use because the production
 server applies the mode-specific Content Security Policy.
@@ -36,31 +44,35 @@ has no permission to connect to remote origins.
 
 ## LAN access and `reader.local`
 
-1. Keep the laptop and iPad on the same LAN. Find the laptop's LAN address in
-   macOS System Settings → Network, or with `ifconfig`.
-2. Allow incoming connections to Node.js in the laptop's firewall if prompted.
-   Open `http://<laptop-ip>:4173/` on the iPad. The server is bound to all
-   interfaces, but the router must allow device-to-device traffic.
-3. Set the laptop's **Local hostname** to `reader` in macOS System Settings →
-   General → Sharing → Local hostname. Bonjour then advertises
-   `reader.local` on the LAN. Use `http://reader.local:4173/` first. A name
-   conflict may cause macOS to choose a numbered name. [Apple's local-hostname
-   instructions](https://support.apple.com/guide/mac-help/change-your-computers-name-or-local-hostname-mchlp2322/mac)
-   explain the setting.
-4. For the port-free canonical URL `http://reader.local/`, stop the server and
-   bind it to port 80:
+1. Keep the Mac and iPad on the same LAN. Allow incoming connections to Node.js
+   in the Mac firewall if prompted, and ensure the router allows devices to
+   reach each other. Run `npm start`; the printed LAN IP requires no DHCP
+   reservation or configuration change.
+2. Open the printed LAN URL or `http://reader.local:4173/` on the iPad. The
+   launcher uses the interface with the default IPv4 LAN gateway. It ignores
+   VPN tunnels and virtual adapters and stops with an error if no routed LAN
+   IPv4 is available. It runs `/usr/bin/dns-sd -P` as the current user; no
+   privileged port or Bonjour configuration is needed for port 4173.
+3. To use the canonical port-free `http://reader.local/`, configure Caddy as a
+   **separate persistent system service** listening on port 80. Its local
+   configuration can be:
 
-   ```sh
-   sudo env PORT=80 HOST=0.0.0.0 "$(command -v node)" server.mjs
+   ```caddyfile
+   http://reader.local {
+       reverse_proxy 127.0.0.1:4173
+   }
    ```
 
-   The process uses elevated privilege only to bind port 80, then drops back
-   to the invoking user's UID/GID. Do not run this from an untrusted checkout.
-   Alternatively, use a LAN-only port-80 forwarding rule managed by your own
-   network administrator. Port 80 is plain HTTP; keep this on a trusted LAN.
+   Start and manage Caddy through your normal macOS service setup, with only
+   the permission that service needs to bind port 80. Do not start Caddy from
+   `npm start`; the Reader launcher remains an ordinary unprivileged process.
+   Caddy does not process documents: it forwards requests for static app files
+   to Reader. Keep the Caddy service restricted to the trusted LAN.
 
-`reader.local` is a Bonjour/mDNS hostname, not a public DNS name. On networks
-that block mDNS or isolate Wi-Fi clients, use the laptop IP address and port.
+`reader.local` is a Bonjour/mDNS hostname, not a public DNS name. A competing
+host already using `reader.local` can prevent reliable resolution; resolve
+that name conflict before using the canonical URL. On networks that block
+mDNS or isolate Wi-Fi clients, use the printed laptop IP address and port.
 The server never needs an internet connection for local PDFs once npm
 dependencies are installed and the application assets have loaded.
 
