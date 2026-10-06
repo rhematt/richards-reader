@@ -9,28 +9,57 @@ block links back to its page and source coordinates. The server delivers
 application files only; it has no document upload, storage, OCR, TTS,
 analytics, or URL-proxy endpoint.
 
-## Run locally
+It supports local PDFs, source-linked navigation and search, reading controls,
+and speech using verified device voices. The original PDF remains available
+beside the accessible view. Reader targets current iPadOS Safari and Edge,
+plus desktop Safari and Chromium-based browsers. See [TESTING.md](TESTING.md)
+for the tested cases and browser limits.
 
-Requires Node.js 22.13 or newer (or Node.js 24+) and npm. From a checkout:
+## Quick start
+
+Use Node.js 22.13 or newer in the 22.x series, or Node.js 24.x, with npm.
+`npm start` is macOS-only because it registers `reader.local` with Bonjour.
+From a terminal on the Mac, run the following for a first manual session. If
+the LaunchAgent below is already running, use its restart command instead.
 
 ```sh
+git clone https://github.com/rhematt/richards-reader.git
+cd richards-reader
 npm ci
-npm test
 npm run build
 npm start
 ```
 
-`npm start` starts a manual Reader session on macOS. It finds the IPv4 address
-on the LAN gateway route, starts the static server on `0.0.0.0:4173`, checks
-it locally, and advertises `reader.local` through Bonjour. It prints the
-current localhost and LAN URLs. Ctrl-C removes the Bonjour registration and
-stops the server. `PORT` changes the server and advertised port together. Run
-Reader as your normal user, without `sudo`.
+`npm start` prints the current LAN URL and `http://reader.local:4173/`. It
+starts Reader as an ordinary user process and advertises `reader.local` with
+Bonjour. Ctrl-C stops both the server and the advertisement. Do not use
+`sudo`. Run `npm test` separately when checking a build or making changes.
 
 Open `http://localhost:4173/` on the Mac or `http://reader.local:4173/` on
 another LAN device. A separate Caddy service provides the port-free URL.
 `npm run dev` starts Vite for source development. Use the production build for
-LAN use; its server applies Reader's Content Security Policy.
+normal LAN use; its server applies Reader's Content Security Policy.
+
+To use Reader on the same computer without a LAN route or Bonjour, serve the
+built app directly. In a macOS or Linux shell:
+
+```sh
+HOST=127.0.0.1 node server.mjs
+```
+
+In Windows PowerShell:
+
+```powershell
+$env:HOST = '127.0.0.1'
+node server.mjs
+```
+
+Open `http://localhost:4173/` on that computer. This mode serves the same app
+and does not advertise `reader.local`. Reader needs `dist/`, so run
+`npm run build` first. Only one Reader process can use port 4173 at a time. If
+the LaunchAgent below is already running, restart it with `launchctl kickstart`
+instead of starting a second copy. For an isolated local test, set a different
+port as well, for example `PORT=4184 HOST=127.0.0.1 node server.mjs`.
 
 | Setup | Availability | URL |
 | --- | --- | --- |
@@ -39,11 +68,10 @@ LAN use; its server applies Reader's Content Security Policy.
 | Caddy system service + Reader LaunchAgent | Port-free access after user login, while the Mac is awake | `http://reader.local/` |
 
 Choose **Open PDF**, drop a local PDF onto the source pane, or enter a public
-URL. The canonical entry point is `/`. A direct URL can be opened with either
-`/?url=<encoded URL>` or `/https://example.com/document.pdf`. Both routes
-call the same browser `open(target)` function. URL mode makes a direct browser
-request to the named origin; sites may block it through CORS. Local-file mode
-has no permission to connect to remote origins.
+URL. A direct URL can be opened with either `/?url=<encoded URL>` or
+`/https://example.com/document.pdf`. In URL mode, the browser contacts the
+named site directly; the site may block extraction through CORS. Local PDF
+mode does not connect to remote sites.
 
 ## LAN access and `reader.local`
 
@@ -59,6 +87,10 @@ has no permission to connect to remote origins.
 3. For `http://reader.local/` without a port number, configure a separate
    port-80 Caddy service as shown below.
 
+`PORT` can change the manual server and advertised port together. The Caddy
+configuration and LaunchAgent below use 4173, so leave that default in place
+for persistent deployment.
+
 `reader.local` is a Bonjour/mDNS hostname, not a public DNS name. A competing
 host already using `reader.local` can prevent reliable resolution; resolve
 that name conflict before using the canonical URL. On networks that block
@@ -72,8 +104,8 @@ Goliath uses a Caddy system service for port 80 and a Reader LaunchAgent for
 port 4173 and Bonjour. This is the supported persistent macOS setup:
 
 ```text
-LAN device → http://reader.local → Bonjour/mDNS → Caddy :80
-                                                → 127.0.0.1:4173 → Reader
+Name lookup: reader.local --Bonjour/mDNS--> Mac's current LAN IPv4
+HTTP:        LAN browser --> Caddy :80 --> 127.0.0.1:4173 --> Reader
 ```
 
 Reader runs under the logged-in user's account. Caddy forwards application
@@ -84,9 +116,10 @@ the user must be logged in for the LaunchAgent to run.
 
 ### 1. Run Caddy as a system service
 
-Install Caddy with Homebrew if needed, then put this in the Caddyfile used by
-the system service (on an Apple Silicon Homebrew installation, usually
-`/opt/homebrew/etc/Caddyfile`):
+Install Caddy with `brew install caddy` if needed, then put this in the
+Caddyfile used by the system service. On Goliath that file is
+`/opt/homebrew/etc/Caddyfile`; use `brew --prefix` to find the Homebrew
+directory on another Mac.
 
 ```caddyfile
 http://reader.local {
@@ -94,13 +127,14 @@ http://reader.local {
 }
 ```
 
-Start Caddy once and use Homebrew to check or restart its system service:
+Start Caddy as a system service and check its status:
 
 ```sh
 sudo brew services start caddy
 sudo brew services list
-sudo brew services restart caddy
 ```
+
+Use `sudo brew services restart caddy` after changing its Caddyfile.
 
 `brew services list` without `sudo` checks user-level jobs, not this system
 service. Use one Caddy service for port 80. Do not launch Caddy from
@@ -110,8 +144,9 @@ so use it on a trusted LAN.
 ### 2. Run Reader as a LaunchAgent
 
 Build Reader first with `npm ci && npm run build`. Save this local script as
-`run-reader.sh` in the checkout, replacing `YOUR_USERNAME` and the npm path if
-your installation differs:
+`run-reader.sh` in the checkout. Replace `YOUR_USERNAME`, the checkout path,
+and the npm path with values from your Mac (`command -v npm` shows that path).
+On Intel Homebrew installations, npm is often at `/usr/local/bin/npm`:
 
 ```zsh
 #!/bin/zsh
@@ -120,10 +155,12 @@ cd "/Users/YOUR_USERNAME/src/richards-reader" || exit 1
 exec /opt/homebrew/bin/npm start
 ```
 
-Make it executable with `chmod 700 run-reader.sh`. Save the following as
-`~/Library/LaunchAgents/com.richard.richards-reader.plist`, replacing every
-`YOUR_USERNAME` with your macOS account name. LaunchAgent paths must be absolute;
-`~` is not expanded inside the plist.
+Make it executable with `chmod 700 run-reader.sh`. Create the agent and log
+directories with `mkdir -p ~/Library/LaunchAgents ~/Library/Logs`, then save
+the following as
+`~/Library/LaunchAgents/com.richard.richards-reader.plist`. Replace
+`YOUR_USERNAME` and the checkout path in every entry. LaunchAgent paths must
+be absolute; `~` is not expanded inside the plist.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -153,16 +190,36 @@ Make it executable with `chmod 700 run-reader.sh`. Save the following as
 </plist>
 ```
 
-Load the agent once, then use `kickstart` for later restarts:
+Load the agent once:
 
 ```sh
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.richard.richards-reader.plist
 launchctl print gui/$(id -u)/com.richard.richards-reader
+```
+
+For later restarts, including after a new DHCP lease or a rebuild, use:
+
+```sh
 launchctl kickstart -k gui/$(id -u)/com.richard.richards-reader
 ```
 
-The process hierarchy is `launchd → npm start → Reader server + dns-sd`.
-`npm start` owns the Bonjour registration and removes it when Reader exits.
+After pulling a new Reader version, update the dependencies and built app in
+the checkout, then restart the agent:
+
+```sh
+git pull --ff-only
+npm ci
+npm run build
+launchctl kickstart -k gui/$(id -u)/com.richard.richards-reader
+```
+
+To stop the LaunchAgent for the current login session, use
+`launchctl bootout gui/$(id -u)/com.richard.richards-reader`. Remove its plist
+if you no longer want Reader to start at login. Caddy is managed separately.
+
+The process hierarchy is
+`launchd → npm start → start-local.mjs → server.mjs + dns-sd`. The launcher
+owns the Bonjour registration and removes it when Reader exits.
 The script and plist contain account-specific paths.
 
 ### 3. Check the endpoint
@@ -183,6 +240,11 @@ current LAN IPv4, the `reader.local` record, and the
 `Richard's Reader._http._tcp` registration. If the Mac gets a new DHCP
 address, restart Reader with `launchctl kickstart -k` as above; its launcher
 will advertise the new address. Caddy still proxies to `127.0.0.1:4173`.
+
+If the port-free URL returns a proxy error, check the Reader listener and
+LaunchAgent log first. If `reader.local` does not resolve, use the printed LAN
+IP and check that the network allows mDNS between devices. A port-4173 address
+conflict usually means a manual Reader session is running alongside the agent.
 
 Neither Caddy nor Reader's server receives local documents. A file selected
 on an iPad or other device is processed in that device's browser. PDF bytes,
@@ -231,11 +293,10 @@ app-page address, solely to return a CSP allowing that URL's origin. The laptop
 does not fetch the URL. The browser fetches it directly with omitted
 credentials and no referrer. Website source frames, where allowed, connect
 directly to the requested site under normal browser frame policies. The
-URL-mode CSP limits connections and frames
-to that origin plus application assets. A redirect to another origin can fail;
-Reader will not proxy around the site's security policy. The URL itself may be
-visible in the laptop's HTTP request and browser history, so avoid sensitive
-tokens in URLs.
+URL-mode CSP limits connections and frames to that origin plus application
+assets. A redirect to another origin can fail. Reader does not proxy around
+the site's security policy. The URL itself may be visible in the laptop's
+HTTP request and browser history, so avoid sensitive tokens in URLs.
 
 No service worker, remote fonts, CDN, third-party JS, telemetry, cloud OCR,
 cloud TTS, or backend document route is included. `node_modules` is installed
@@ -281,3 +342,10 @@ The generator creates ordinary prose, a two-column academic paper with
 citations, a footnote and references, papers with images and tables, and an
 image-only scan. See [TESTING.md](TESTING.md) for the manual checklist and
 results.
+
+## Help
+
+Report setup problems and bugs in
+[GitHub Issues](https://github.com/rhematt/richards-reader/issues). Include the
+operating system, Node.js and browser versions, plus the error message. Use
+synthetic or public PDFs when sharing a reproduction.
