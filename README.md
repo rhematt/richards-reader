@@ -16,6 +16,7 @@ Requires Node.js 22.13 or newer (or Node.js 24+) and npm. From a checkout:
 
 ```sh
 npm ci
+npm test
 npm run build
 npm start
 ```
@@ -144,8 +145,10 @@ inside the client browser without adding a server proxy.
 
 ## Test with synthetic material
 
-The repository contains a **source generator**, not document fixtures. With
-Python plus `reportlab` and `Pillow` installed:
+The repository contains a **source generator** and an automated compatibility
+regression, not committed document fixtures. Run `npm test` to exercise
+`IPAD-PDF-001` with synthetic PDFs while stream async iteration is unavailable.
+With Python plus `reportlab` and `Pillow` installed:
 
 ```sh
 python3 scripts/generate-fixtures.py /tmp/reader-fixtures
@@ -161,7 +164,7 @@ are in [TESTING.md](TESTING.md).
 ## GitHub publication
 
 The intended public repository name is `richards-reader`. Publish only after
-the full checklist, including an actual iPad Safari LAN check, passes and a
+the full checklist, including actual iPad Safari and Edge LAN checks, passes and a
 history/security review finds no private documents or secrets. The generated
 PDFs, `dist/`, caches, logs, machine configuration, and credentials are
 ignored. No GitHub credential is needed to run Reader locally.

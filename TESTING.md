@@ -1,5 +1,54 @@
 # Reader V1 test checklist
 
+## IPAD-PDF-001 — Local PDF opens and extracts on iPadOS
+
+Given Reader loaded over the LAN on an actual iPad, select a normal text-based
+PDF using the browser file picker. In **both iPad Safari and iPad Edge**, verify
+that the original pane renders, extraction completes, the accessible pane has
+readable blocks, tapping a block highlights its original page and bounding box,
+and TTS reads from that block without a JavaScript exception. Inspect the Reader
+server requests: the PDF bytes must never be uploaded. Repeat with ordinary,
+two-column academic, figure-containing and table-containing PDFs. Also repeat
+the PDF checks in desktop Safari and desktop Chromium/Edge.
+
+The automated `npm test` regression removes `ReadableStream` async iteration
+while retaining `getReader()` and exercises the production PDF model with
+synthetic ordinary, two-column, and figure/table PDFs. It checks extracted
+text, source page identity and bounding boxes, the existing left-before-right
+column order, figure and caption blocks, a real aligned table and caption,
+and zero network fetches. This simulated compatibility test does not
+substitute for the real-device run.
+
+On 6 Oct 2026, this test failed **before the implementation change** with
+`TypeError: readableStream is not async iterable` at PDF.js 6.4.299
+`PDFPageProxy.getTextContent()` called from `openPdf()`. The installed PDF.js
+implementation uses `for await` on `streamTextContent()` there. After Reader
+changed to explicit `getReader()` chunk consumption, the same regression
+passed. No PDF.js version or dependency was changed.
+
+Desktop browser checks on 6 Oct 2026 using the production LAN build and only
+synthetic PDFs:
+
+| Browser | Ordinary PDF | Two-column paper | Figure and table PDF | Source tracking and local TTS |
+| --- | --- | --- | --- | --- |
+| macOS Safari | Original and reflow rendered | Introduction before Results; references present | Figure crop and real table present | Tapping text highlighted the source box and started a verified device voice |
+| macOS Edge (Chromium) | Original and reflow rendered | Introduction before Results; references present | Figure crop and real table present | Tapping text highlighted the source box and started a verified device voice |
+
+The iPad checks require the **same build** in both Safari and Edge. Refresh
+Reader on the iPad after `npm run build`, open a synthetic or other non-private
+text PDF through its file picker, tap an accessible block, tap a source region,
+and start/pause TTS. Repeat with the two-column and figure/table PDFs. Check
+that the `LOCAL DOCUMENT MODE` badge remains visible. To verify the network
+boundary, inspect the browser or laptop network requests if available: the
+laptop should receive application GET/HEAD requests only, with no PDF request
+body or document-derived content. The static server has no upload route and
+rejects other methods with 405.
+
+**Real-device result: Pending.** Record iPadOS version, browser versions,
+document categories, source tracking, TTS and server request inspection here
+after the checks are performed. GitHub publication remains blocked until both
+iPad browsers pass.
+
 Use `npm ci`, `npm run build`, and `npm start`. Test with synthetic files from
 `scripts/generate-fixtures.py` or public documents only. Never add private
 documents to the repository.
@@ -23,7 +72,7 @@ documents to the repository.
 | LAN address | App responds on laptop LAN IP and port | Passed from the laptop using its LAN IP; a second device was not available |
 | iPad-size layout | Both panes, settings, and controls remain usable | Checked in desktop browser at 1024×768 and 820×1180; this is not an iPad Safari test |
 | iPad Safari over LAN | Open file from iPad, sync both panes, local voice and touch ruler | **Pending actual iPad access** |
-| Desktop Safari/Chrome/Edge | Same PDF checks in each target browser | **Pending target-browser checks**; in-app desktop browser tested |
+| Desktop Safari/Chrome/Edge | Same PDF checks in each target browser | macOS Safari and Edge (Chromium) passed ordinary, two-column, and figure/table PDF checks after the compatibility change; separate Chrome brand check pending |
 | Dependency security | No reported high-severity advisories | `npm audit --audit-level=high` passed after upgrading PDF.js to 6.4.299 |
 | Document close | PDF worker, rendered pages, and extracted blocks are released | Passed in desktop browser; a second PDF opened successfully afterward |
 

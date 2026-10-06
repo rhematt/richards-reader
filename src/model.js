@@ -38,6 +38,29 @@ function textRuns(content, viewport) {
   });
 }
 
+// PDF.js getTextContent() uses `for await` on a ReadableStream. Some iPadOS
+// WebKit versions expose getReader() without stream async iteration. Consume
+// the same PDF.js chunks explicitly so every item and its coordinates reach
+// the existing reconstruction/classification pipeline in the same order.
+export async function readTextContent(page) {
+  const reader = page.streamTextContent().getReader();
+  const content = { items: [], styles: Object.create(null), lang: null };
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return content;
+      content.lang ??= value.lang;
+      Object.assign(content.styles, value.styles);
+      content.items.push(...value.items);
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function toLines(runs, pageWidth) {
   const lines = [];
   for (const run of [...runs].sort((a, b) => a.y - b.y || a.x - b.x)) {
@@ -203,7 +226,7 @@ export async function openPdf(data, onProgress = () => {}) {
     for (let number = 1; number <= pdf.numPages; number++) {
     const source = await pdf.getPage(number);
     const viewport = source.getViewport({ scale: 1 });
-    const content = await source.getTextContent();
+    const content = await readTextContent(source);
     const runs = textRuns(content, viewport);
     usableCharacters += runs.map(run => run.text.trim().length).reduce((a, b) => a + b, 0);
     const lines = toLines(runs, viewport.width);
