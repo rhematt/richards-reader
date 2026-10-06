@@ -88,3 +88,12 @@ export const v2CompositePdf = () => pdfFixture([
   { x: 50, y: 103, text: 'The closing paragraph follows the equation.' },
   { x: 298, y: 20, text: '1', size: 9 }
 ], { image: true });
+
+export const v2MixedBandsPdf = () => pdfFixture([
+  { x: 50, y: 752, text: 'Mixed Layout Study', size: 22 },
+  ...Array.from({ length: 4 }, (_, i) => ({ x: 50, y: 708 - i * 25, text: `Before left ${i + 1}.` })),
+  ...Array.from({ length: 4 }, (_, i) => ({ x: 325, y: 708 - i * 25, text: `Before right ${i + 1}.` })),
+  { x: 50, y: 560, text: '2 Results and Interpretation Across Both Columns', size: 17 },
+  ...Array.from({ length: 4 }, (_, i) => ({ x: 50, y: 520 - i * 25, text: `After left ${i + 1}.` })),
+  ...Array.from({ length: 4 }, (_, i) => ({ x: 325, y: 520 - i * 25, text: `After right ${i + 1}.` }))
+]);

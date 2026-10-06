@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import { runnerImport } from 'vite';
-import { v2CompositePdf } from './pdf-fixture.mjs';
+import { v2CompositePdf, v2MixedBandsPdf } from './pdf-fixture.mjs';
 
 Uint8Array.prototype.toHex ??= function () { return Buffer.from(this).toString('hex'); };
 Map.prototype.getOrInsertComputed ??= function (key, callback) {
@@ -52,5 +52,24 @@ test('V2-STRUCT-001: source regions own graph, table and display-equation text i
   } finally {
     if (model) await model.task.destroy();
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('LAYOUT-004/005: a spanning heading splits two-column reading into ordered bands', async () => {
+  const { module: { openPdf } } = await runnerImport('/src/model.js');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
+  const model = await openPdf(v2MixedBandsPdf());
+  try {
+    assert.deepEqual(model.pages[0].blocks.map(block => block.text), [
+      'Mixed Layout Study',
+      ...Array.from({ length: 4 }, (_, i) => `Before left ${i + 1}.`),
+      ...Array.from({ length: 4 }, (_, i) => `Before right ${i + 1}.`),
+      '2 Results and Interpretation Across Both Columns',
+      ...Array.from({ length: 4 }, (_, i) => `After left ${i + 1}.`),
+      ...Array.from({ length: 4 }, (_, i) => `After right ${i + 1}.`)
+    ]);
+    assert.equal(model.pages[0].blocks[9].level, 1);
+  } finally {
+    await model.task.destroy();
   }
 });

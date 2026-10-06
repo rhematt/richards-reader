@@ -1,10 +1,13 @@
 import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { detectSourceRegions } from './layout/regions.js';
+import { reconcileRegions } from './layout/reconcile.js';
+import { orderRegions } from './layout/reading-order.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 export const BLOCK_TYPES = Object.freeze([
-  'body', 'heading', 'image', 'figure_caption', 'table', 'table_caption',
+  'title', 'body', 'heading', 'image', 'figure_caption', 'table', 'table_caption',
   'equation', 'code', 'footnote', 'endnote', 'inline_citation',
   'bibliography', 'header', 'footer', 'page_number', 'sidebar', 'source_region', 'table_source_text'
 ]);
@@ -21,12 +24,13 @@ const union = boxes => ({
 });
 const clean = text => text.replace(/\s+/g, ' ').trim();
 
-function textRuns(content, viewport) {
-  return content.items.filter(item => typeof item.str === 'string' && item.str.trim()).map(item => {
+function textRuns(content, viewport, page) {
+  return content.items.filter(item => typeof item.str === 'string' && item.str.trim()).map((item, index) => {
     const t = pdfjs.Util.transform(viewport.transform, item.transform);
     const height = Math.max(4, Math.hypot(t[2], t[3]));
     const width = Math.max(1, item.width);
     return {
+      id: `p${page}-g${index}`,
       text: item.str,
       x: t[4], y: t[5] - height,
       w: width, h: height,
@@ -125,11 +129,12 @@ function makeTextBlocks(lines, page, pageWidth, pageHeight, medianSize) {
     }).join('').replace(/- (?=[a-z])/g, ''));
     const box = union(group.map(l => l.box));
     const fontSize = median(group.map(l => l.fontSize));
-    const block = { id: `p${page}-b${blocks.length}`, page, bbox: box, text, fontSize, bold: group.some(l => l.bold), type: 'body', confidence: 'heuristic', citations: [...text.matchAll(citationPattern)].map(match => ({ start: match.index, end: match.index + match[0].length, text: match[0], type: 'inline_citation' })) };
+    const block = { id: `p${page}-b${blocks.length}`, page, bbox: box, bounds: box, text, fontSize, bold: group.some(l => l.bold), type: 'body', confidence: 'heuristic', sourceObjectIds: group.flatMap(line => line.runs.map(run => run.id)), citations: [...text.matchAll(citationPattern)].map(match => ({ start: match.index, end: match.index + match[0].length, text: match[0], type: 'inline_citation' })) };
     if (/^(figure|fig\.?|image)\s*\d+[.:\s]/i.test(text)) block.type = 'figure_caption';
     else if (/^table\s*\d+[.:\s]/i.test(text)) block.type = 'table_caption';
     else if (/^(references|bibliography|works cited|endnotes|notes)$/i.test(text)) block.type = 'heading';
-    else if (box.y < pageHeight * .065 && fontSize <= medianSize * 1.15) block.type = 'header';
+    else if (page === 1 && box.y < pageHeight * .18 && fontSize > medianSize * 1.55 && text.length < 180) block.type = 'title';
+    else if (box.y < pageHeight * .045 && fontSize <= medianSize * 1.15) block.type = 'header';
     else if (box.y > pageHeight * .94 && /^\d{1,4}$/.test(text)) block.type = 'page_number';
     else if (box.y > pageHeight * .94 && fontSize <= medianSize * 1.15) block.type = 'footer';
     else if ((fontSize > medianSize * 1.18 || block.bold) && text.length < 140 && !/[.!?]$/.test(text)) block.type = 'heading';
@@ -137,7 +142,10 @@ function makeTextBlocks(lines, page, pageWidth, pageHeight, medianSize) {
     else if (/^(?:def |class |function |import |const |let |var |#include\b)/.test(text) || (/monospace|courier/i.test(group[0].runs[0]?.font) && text.length > 8)) block.type = 'code';
     else if (/[=∑∫√≈≤≥]/.test(text) && text.length < 100 && fontSize >= medianSize * .85) block.type = 'equation';
     else if (box.x > pageWidth * .15 && box.w < pageWidth * .28 && fontSize < medianSize * .92 && text.length < 400) block.type = 'sidebar';
-    if (block.type === 'heading') block.level = fontSize > medianSize * 1.55 ? 1 : /^\d+(?:\.\d+)+/.test(text) ? 3 : 2;
+    if (block.type === 'heading') {
+      const number = text.match(/^(\d+(?:\.\d+)*)\s+/);
+      block.level = number ? Math.min(6, number[1].split('.').length) : fontSize > medianSize * 1.3 ? 1 : 2;
+    }
     blocks.push(block);
     group = [];
   };
@@ -208,7 +216,8 @@ function postProcess(pages) {
   let inEndnotes = false;
   for (const page of pages) for (const block of page.blocks) {
     const key = block.text.toLowerCase().replace(/\d+/g, '#');
-    if (['header', 'footer'].includes(block.type) && repeated.get(key) < 2) block.type = 'body';
+    // A one-page document can still have a running header. Keep page-furniture
+    // classification in the source model rather than leaking it into prose.
     if (block.type === 'heading' && /^(references|bibliography|works cited)$/i.test(block.text)) { inReferences = true; inEndnotes = false; block.section = 'bibliography'; }
     else if (block.type === 'heading' && /^(endnotes|notes)$/i.test(block.text)) { inEndnotes = true; inReferences = false; block.section = 'endnote'; }
     else if (block.type === 'heading' && block.fontSize > 17) { inReferences = false; inEndnotes = false; }
@@ -218,7 +227,9 @@ function postProcess(pages) {
 }
 
 export async function openPdf(data, onProgress = () => {}) {
-  const task = pdfjs.getDocument({ data, useSystemFonts: true, enableScripting: false, isEvalSupported: false });
+  // PDF.js may transfer and detach its input buffer to a worker. Preserve the
+  // caller's authoritative bytes for review/export and source integrity.
+  const task = pdfjs.getDocument({ data: data instanceof Uint8Array ? data.slice() : data.slice(0), useSystemFonts: true, enableScripting: false, isEvalSupported: false });
   try {
     const pdf = await task.promise;
     const pages = [];
@@ -227,20 +238,17 @@ export async function openPdf(data, onProgress = () => {}) {
     const source = await pdf.getPage(number);
     const viewport = source.getViewport({ scale: 1 });
     const content = await readTextContent(source);
-    const runs = textRuns(content, viewport);
+    const runs = textRuns(content, viewport, number);
     usableCharacters += runs.map(run => run.text.trim().length).reduce((a, b) => a + b, 0);
     const lines = toLines(runs, viewport.width);
     const medianSize = median(lines.map(l => l.fontSize)) || 12;
-    const blocks = makeTextBlocks(readingOrder(lines, viewport.width, viewport.height), number, viewport.width, viewport.height, medianSize);
     const operators = await source.getOperatorList();
-    for (const [index, bbox] of imageRegions(operators, viewport).entries()) blocks.push({ id: `p${number}-i${index}`, page: number, type: 'image', bbox, text: 'Figure or image from source', confidence: 'PDF image operator' });
-    const tables = detectTables(lines, number, medianSize);
-    for (const table of tables) {
-      blocks.push(table);
-      for (const block of blocks.filter(b => b.type === 'body' && b.bbox.y >= table.bbox.y - 2 && b.bbox.y + b.bbox.h <= table.bbox.y + table.bbox.h + 2)) block.type = 'table_source_text';
-    }
-    const ordered = readingOrder(blocks.map(block => ({ ...block, box: block.bbox })), viewport.width, viewport.height);
-    pages.push({ number, width: viewport.width, height: viewport.height, blocks: ordered, source });
+    const proposed = detectSourceRegions({ lines, imageBoxes: imageRegions(operators, viewport), page: number, width: viewport.width, height: viewport.height, medianSize });
+    const { regions, proseRuns } = reconcileRegions(proposed, runs);
+    const proseLines = toLines(proseRuns, viewport.width);
+    const proseBlocks = makeTextBlocks(readingOrder(proseLines, viewport.width, viewport.height), number, viewport.width, viewport.height, medianSize);
+    const ordered = orderRegions([...regions, ...proseBlocks], viewport.width, viewport.height);
+    pages.push({ number, width: viewport.width, height: viewport.height, blocks: ordered, regions, source });
     onProgress(number, pdf.numPages);
     }
     postProcess(pages);
