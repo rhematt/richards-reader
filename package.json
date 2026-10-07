@@ -4,12 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "predev": "node scripts/copy-neural-assets.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "prebuild": "node scripts/copy-neural-assets.mjs",
     "build": "vite build",
     "test": "node --test test/*.test.mjs",
-    "start": "node scripts/start-local.mjs"
+    "start": "node scripts/start-local.mjs",
+    "export-caddy-root": "node scripts/export-caddy-root.mjs"
   },
   "dependencies": {
+    "@dittli/tts-core": "0.6.0",
+    "@dittli/tts-en": "0.6.0",
     "@fontsource/atkinson-hyperlegible": "5.3.0",
     "@fontsource/lexend": "5.3.0",
     "onnxruntime-web": "^1.30.0",

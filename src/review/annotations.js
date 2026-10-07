@@ -1,6 +1,24 @@
 const clone = value => structuredClone(value);
 const round = value => Math.round(value * 1e6) / 1e6;
 const TYPES = new Set(['ink', 'highlight', 'underline', 'strikeout', 'note', 'freetext']);
+let idSerial = 0;
+
+function annotationId() {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    try { return cryptoApi.randomUUID(); } catch { /* Try the next local ID source. */ }
+  }
+  try {
+    if (typeof cryptoApi?.getRandomValues === 'function') {
+      const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 15) | 64;
+      bytes[8] = (bytes[8] & 63) | 128;
+      const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+  } catch { /* The session fallback must still commit the mark. */ }
+  return `local-${Date.now().toString(36)}-${(++idSerial).toString(36)}`;
+}
 
 export function screenToPdfPoint(viewport, rect, clientX, clientY) {
   const x = (clientX - rect.left) * viewport.width / rect.width;
@@ -27,10 +45,15 @@ export class AnnotationStore {
   add(annotation) {
     if (!TYPES.has(annotation.type) || !Number.isInteger(annotation.page) || annotation.page < 1 || !annotation.geometry) throw new Error('Invalid annotation');
     if (annotation.id && this.#items.some(item => item.id === annotation.id)) throw new Error('Duplicate annotation id');
+    const copy = clone(annotation);
+    const generated = annotation.id || annotationId();
+    let id = generated;
+    while (this.#items.some(item => item.id === id)) id = `${generated}-${(++idSerial).toString(36)}`;
+    const item = { ...copy, id, createdAt: annotation.createdAt || new Date().toISOString() };
+    const result = clone(item);
     this.#record();
-    const item = { id: annotation.id || crypto.randomUUID(), createdAt: annotation.createdAt || new Date().toISOString(), ...clone(annotation) };
     this.#items.push(item);
-    return clone(item);
+    return result;
   }
   update(id, changes) {
     const index = this.#items.findIndex(item => item.id === id);

@@ -78,6 +78,26 @@ test('ANNOT-010..017: edit/delete/undo/redo and hide/show leave exact session st
   assert.equal(Buffer.from(source).toString('hex'), before);
 });
 
+test('ANNOT-029: unavailable randomUUID still assigns unique IDs and commits marks', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const random = { getRandomValues(array) { array.fill(17); return array; } };
+  try {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: random });
+    const store = new AnnotationStore();
+    const first = store.add({ type: 'ink', page: 1, geometry: { paths: [[{ x: 10, y: 20 }, { x: 30, y: 40 }]] } });
+    const second = store.add({ type: 'ink', page: 1, geometry: { paths: [[{ x: 40, y: 50 }, { x: 60, y: 70 }]] } });
+    assert.ok(first.id && second.id && first.id !== second.id);
+    assert.equal(store.list().length, 2);
+    random.randomUUID = () => { throw new Error('unavailable in this origin'); };
+    const fallback = store.add({ type: 'note', page: 1, geometry: { point: { x: 9, y: 10 } } });
+    assert.match(fallback.id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/, 'getRandomValues remains usable when randomUUID throws');
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+    const noCrypto = new AnnotationStore();
+    assert.notEqual(noCrypto.add({ type: 'note', page: 1, geometry: { point: { x: 5, y: 6 } } }).id,
+      noCrypto.add({ type: 'note', page: 1, geometry: { point: { x: 7, y: 8 } } }).id);
+  } finally { Object.defineProperty(globalThis, 'crypto', original); }
+});
+
 test('ANNOT-018..023: marked export is valid, searchable, coordinate-correct and repeatable', async () => {
   const source = ordinaryPdf();
   const before = Buffer.from(source).toString('hex');

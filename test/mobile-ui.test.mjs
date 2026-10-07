@@ -67,7 +67,26 @@ class DevTools {
   }
 }
 
-test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet regression', { timeout: 120000, skip: !existsSync(edge) && 'Set READER_TEST_BROWSER to an installed Chromium/Edge executable' }, async () => {
+async function touchCoordinateOffset(cdp) {
+  // CDP touch points are screen coordinates. Mobile emulation can add a browser
+  // viewport offset, so calibrate against the delivered DOM PointerEvent.
+  await cdp.evaluate(`(() => { window.__touchCalibration = null; document.addEventListener('pointerdown', event => { window.__touchCalibration = { x: event.clientX, y: event.clientY }; }, { capture: true, once: true }); })()`);
+  await cdp.call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 2, y: 2, id: 9 }] });
+  await cdp.call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  const delivered = await cdp.evaluate('window.__touchCalibration');
+  assert.ok(delivered, 'synthetic touch calibration reaches the page');
+  return { x: delivered.x - 2, y: delivered.y - 2 };
+}
+
+async function dragTouch(cdp, point, distance, offset, id = 1) {
+  const x = point.x - offset.x;
+  const y = point.y - offset.y;
+  await cdp.call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id }] });
+  await cdp.call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + distance, id }] });
+  await cdp.call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
+
+test('MOBILE-001..010: Chromium phone, desktop and synthetic tablet/pointer regressions', { timeout: 120000, skip: !existsSync(edge) && 'Set READER_TEST_BROWSER to an installed Chromium/Edge executable' }, async () => {
   const temp = await mkdtemp(join(tmpdir(), 'reader-mobile-test-'));
   const ordinary = join(temp, 'ordinary.pdf');
   const complex = join(temp, 'complex.pdf');
@@ -91,6 +110,8 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     await cdp.call('Page.enable');
     await cdp.call('Runtime.enable');
     await cdp.call('Network.enable');
+    await until(() => cdp.evaluate('!!window.readerDiagnostics'));
+    assert.equal(await cdp.evaluate('window.readerDiagnostics.secureContext'), await cdp.evaluate('window.isSecureContext'), 'HTTPS-010: local secure-context state is exposed without document data');
 
     for (const [width, height] of [[390, 844], [430, 932], [844, 390], [932, 430]]) {
       await cdp.viewport(width, height);
@@ -99,14 +120,14 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
         const source = document.querySelector('#source-pane').getBoundingClientRect();
         const visible = id => { const node = document.getElementById(id); return !!node && getComputedStyle(node).display !== 'none' && node.getBoundingClientRect().width > 0; };
         return { readerWidth: reader.width, sourceWidth: source.width, appWidth: document.documentElement.scrollWidth, viewportWidth: innerWidth,
-          original: visible('mobile-original-button'), menu: visible('mobile-menu-button'), settings: visible('mobile-settings-button'), play: visible('speak-button'),
+          original: visible('mobile-original-button'), menu: visible('mobile-menu-button'), settings: visible('mobile-settings-button'), play: visible('speak-button'), stop: visible('stop-speech'),
           previous: visible('previous-sentence'), next: visible('next-sentence'), speed: visible('speech-rate'), search: visible('search-input'),
-          touchHeights: ['mobile-original-button','mobile-menu-button','mobile-settings-button','speak-button','previous-sentence','next-sentence','speech-rate','search-input','outline-button'].map(id => document.getElementById(id)?.getBoundingClientRect().height || 0) };
+          touchHeights: ['mobile-original-button','mobile-menu-button','mobile-settings-button','speak-button','stop-speech','previous-sentence','next-sentence','speech-rate','search-input','outline-button'].map(id => document.getElementById(id)?.getBoundingClientRect().height || 0) };
       })()`);
       assert.ok(layout.readerWidth >= width - 2, `${width}×${height}: reading pane fills the phone`);
       assert.ok(layout.sourceWidth === 0, `${width}×${height}: no permanent original pane`);
       assert.ok(layout.appWidth <= layout.viewportWidth + 1, `${width}×${height}: no application horizontal scroll`);
-      for (const key of ['original', 'menu', 'settings', 'play', 'previous', 'next', 'speed', 'search']) assert.ok(layout[key], `${width}×${height}: ${key} is available`);
+      for (const key of ['original', 'menu', 'settings', 'play', 'stop', 'previous', 'next', 'speed', 'search']) assert.ok(layout[key], `${width}×${height}: ${key} is available`);
       assert.ok(layout.touchHeights.every(height => height >= 43), `${width}×${height}: primary controls are at least 44 CSS pixels high`);
     }
 
@@ -171,6 +192,7 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     assert.equal(await cdp.evaluate('document.querySelector("#reader-scroll").scrollTop'), initialTop, 'MOBILE-003: closing preserves reading position');
     await cdp.evaluate(`document.querySelector('#search-input').value = 'Paragraph'; document.querySelector('#search-input').dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('#search-next').click()`);
     assert.ok(await cdp.evaluate(`!!document.querySelector('.block.search-current.selected') && !!document.querySelector('.source-highlight')`), 'MOBILE-002: search retains accessible and source linkage');
+    await cdp.evaluate(`document.querySelector('#stop-speech').click()`);
 
     await cdp.evaluate(`document.querySelector('#ruler-mode').value = 'line'; document.querySelector('#ruler-mode').dispatchEvent(new Event('change', { bubbles: true }))`);
     assert.ok(await cdp.evaluate(`!document.querySelector('#source-ruler').hidden && !document.querySelector('#ruler').hidden`), 'RULER-001/002: both representations show a ruler');
@@ -180,17 +202,15 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     await cdp.evaluate(`document.querySelector('#reader-scroll').scrollTop += 80`);
     const afterScroll = await cdp.evaluate('document.querySelector("#ruler").getBoundingClientRect().top');
     assert.ok(Math.abs(afterScroll - ruler.top) <= 1, 'MOBILE-004: document scroll does not move ruler');
-    const beforeGrip = await cdp.evaluate(`(() => { const grip = document.querySelector('#ruler-grip').getBoundingClientRect(); return { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2, scroll: document.querySelector('#reader-scroll').scrollTop }; })()`);
-    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: beforeGrip.x, y: beforeGrip.y, button: 'left', clickCount: 1 });
-    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: beforeGrip.x, y: beforeGrip.y + 45, button: 'left', buttons: 1 });
-    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: beforeGrip.x, y: beforeGrip.y + 45, button: 'left', clickCount: 1 });
-    const afterGrip = await cdp.evaluate(`({ top: document.querySelector('#ruler').getBoundingClientRect().top, scroll: document.querySelector('#reader-scroll').scrollTop })`);
-    assert.ok(afterGrip.top > afterScroll + 30, 'MOBILE-004: dragging grip moves ruler');
+    const beforeGrip = await cdp.evaluate(`(() => { const grip = document.querySelector('#ruler-grip').getBoundingClientRect(); const x = grip.x + grip.width / 2, y = grip.y + grip.height / 2; return { x, y, target: document.elementFromPoint(x, y)?.id, scroll: document.querySelector('#reader-scroll').scrollTop, rulerY: window.readerDiagnostics.interaction.rulerY }; })()`);
+    assert.equal(beforeGrip.target, 'ruler-grip', 'MOBILE-004: visible grip receives touch');
+    const touchOffset = await touchCoordinateOffset(cdp);
+    await dragTouch(cdp, beforeGrip, 45, touchOffset, 2);
+    const afterGrip = await cdp.evaluate(`({ top: document.querySelector('#ruler').getBoundingClientRect().top, scroll: document.querySelector('#reader-scroll').scrollTop, rulerY: window.readerDiagnostics.interaction.rulerY })`);
+    assert.ok(afterGrip.top > afterScroll + 30, `MOBILE-004: dragging grip moves ruler: ${JSON.stringify({ beforeGrip, afterGrip, touchOffset })}`);
     assert.equal(afterGrip.scroll, beforeGrip.scroll, 'MOBILE-004: dragging grip does not scroll document');
     const touchGrip = await cdp.evaluate(`(() => { const rect = document.querySelector('#ruler-grip').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, top: document.querySelector('#ruler').getBoundingClientRect().top, scroll: document.querySelector('#reader-scroll').scrollTop }; })()`);
-    await cdp.call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touchGrip.x, y: touchGrip.y, id: 1 }] });
-    await cdp.call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: touchGrip.x, y: touchGrip.y + 30, id: 1 }] });
-    await cdp.call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await dragTouch(cdp, touchGrip, 30, touchOffset);
     const touchResult = await cdp.evaluate(`({ top: document.querySelector('#ruler').getBoundingClientRect().top, scroll: document.querySelector('#reader-scroll').scrollTop })`);
     assert.ok(touchResult.top > touchGrip.top + 15, 'MOBILE-004: touch drag moves grip');
     assert.equal(touchResult.scroll, touchGrip.scroll, 'MOBILE-004: touch grip does not scroll document');
@@ -203,11 +223,9 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     await cdp.evaluate(`document.querySelector('#source-scroll').scrollTop += 50`);
     assert.ok(Math.abs((await cdp.evaluate(`document.querySelector('#source-ruler').getBoundingClientRect().top`)) - sourceRuler.top) <= 1, 'RULER-005: PDF scrolling leaves source ruler in viewport');
     const sourceGrip = await cdp.evaluate(`(() => { const rect = document.querySelector('#source-ruler-grip').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, scroll: document.querySelector('#source-scroll').scrollTop, readerTop: document.querySelector('#ruler').getBoundingClientRect().top }; })()`);
-    await cdp.call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: sourceGrip.x, y: sourceGrip.y, id: 2 }] });
-    await cdp.call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: sourceGrip.x, y: sourceGrip.y + 32, id: 2 }] });
-    await cdp.call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await dragTouch(cdp, sourceGrip, 32, touchOffset, 2);
     const sourceMoved = await cdp.evaluate(`({ top: document.querySelector('#source-ruler').getBoundingClientRect().top, scroll: document.querySelector('#source-scroll').scrollTop, readerTop: document.querySelector('#ruler').getBoundingClientRect().top })`);
-    assert.ok(sourceMoved.top > sourceRuler.top + 15, 'RULER-009/010: source grip moves its ruler');
+    assert.ok(sourceMoved.top > sourceRuler.top + 15, `RULER-009/010: source grip moves its ruler: ${JSON.stringify({ sourceRuler, sourceGrip, sourceMoved, touchOffset })}`);
     assert.equal(sourceMoved.scroll, sourceGrip.scroll, 'RULER-010: source grip does not scroll PDF');
     assert.equal(sourceMoved.readerTop, sourceGrip.readerTop, 'RULER-004: source grip leaves accessible ruler alone');
     await cdp.evaluate(`document.querySelector('#mobile-zoom-in').click()`);
@@ -261,10 +279,15 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: penStart.x + 55, y: penStart.y + 25, button: 'left', buttons: 1, pointerType: 'pen' });
     await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: penStart.x + 55, y: penStart.y + 25, button: 'left', clickCount: 1, pointerType: 'pen' });
     assert.equal(await cdp.evaluate('document.querySelector("#source-scroll").scrollTop'), tabletScroll, 'ANNOT-025: broad palm contact does not scroll during a stylus stroke');
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: penStart.x + 80, y: penStart.y + 75, button: 'left', clickCount: 1, pointerType: 'pen' });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: penStart.x + 120, y: penStart.y + 90, button: 'left', buttons: 1, pointerType: 'pen' });
+    await cdp.evaluate(`document.querySelector('.review-overlay').dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1, pointerType: 'pen', clientX: ${penStart.x + 120}, clientY: ${penStart.y + 90} }))`);
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: penStart.x + 120, y: penStart.y + 90, button: 'left', clickCount: 1, pointerType: 'pen' });
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.review-overlay [data-annotation-id]').length`), 2, 'ANNOT-032: synthetic Pencil pointercancel commits the last confirmed stroke');
     await cdp.evaluate(`(() => { document.querySelector('#annotation-tool').value = 'select'; const overlay = document.querySelector('.review-overlay'); overlay.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'pen', pointerId: 99, button: 0, clientX: ${penStart.x + 150}, clientY: ${penStart.y + 80} })); overlay.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'pen', pointerId: 99, button: 0, clientX: ${penStart.x + 150}, clientY: ${penStart.y + 80} })); })()`);
-    assert.equal(await cdp.evaluate(`document.querySelectorAll('.review-overlay [data-annotation-id]').length`), 1, 'ANNOT-028: committed stylus stroke remains after clicking off');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('.review-overlay [data-annotation-id]').length`), 2, 'ANNOT-028: committed stylus strokes remain after clicking off');
     await cdp.evaluate(`document.querySelector('#review-mode-button').click()`);
-    await cdp.evaluate(`document.querySelector('#annotation-undo').click()`); // independent desktop workflow starts empty
+    await cdp.evaluate(`document.querySelector('#annotation-undo').click(); document.querySelector('#annotation-undo').click()`); // independent desktop workflow starts empty
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.review-overlay [data-annotation-id]').length`), 0, 'tablet mark is removed by explicit undo only');
     await cdp.viewport(1280, 800, false);
     const desktop = await cdp.evaluate(`(() => ({ source: document.querySelector('#source-pane').getBoundingClientRect().width, reader: document.querySelector('#reader-pane').getBoundingClientRect().width }))()`);
@@ -277,6 +300,23 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: inkStart.x + 60, y: inkStart.y + 20, button: 'left', clickCount: 1 });
     const desktopInk = await cdp.evaluate(`({ marks: document.querySelectorAll('.review-overlay [data-annotation-id]').length, mode: document.body.classList.contains('review-mode'), overlays: document.querySelectorAll('.review-overlay').length, tool: document.querySelector('#annotation-tool').value, list: document.querySelector('#annotation-list').textContent })`);
     assert.ok(desktopInk.marks === 1, `ANNOT-001: desktop pen creates a source overlay annotation: ${JSON.stringify(desktopInk)}; ${cdp.logs.slice(-3).join(' | ')}`);
+    await cdp.evaluate(`Object.defineProperty(window.crypto, 'randomUUID', { configurable: true, value: undefined })`);
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: inkStart.x + 190, y: inkStart.y + 80, button: 'left', clickCount: 1 });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: inkStart.x + 230, y: inkStart.y + 100, button: 'left', buttons: 1 });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: inkStart.x + 230, y: inkStart.y + 100, button: 'left', clickCount: 1 });
+    assert.ok(await cdp.evaluate(`document.querySelectorAll('#annotation-list .annotation-entry').length === 2 && document.querySelectorAll('.review-overlay [data-annotation-id]').length === 2 && !document.querySelector('[data-annotation-id="preview"]')`), 'ANNOT-029: unavailable randomUUID still commits a permanent visible mark and list entry');
+    await cdp.evaluate(`delete window.crypto.randomUUID; document.querySelector('#annotation-undo').click()`);
+    await cdp.evaluate(`window.readerDiagnostics.enablePointerTrace(true)`);
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: inkStart.x + 190, y: inkStart.y + 80, button: 'left', clickCount: 1 });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: inkStart.x + 230, y: inkStart.y + 100, button: 'left', buttons: 1 });
+    await cdp.evaluate(`(() => { const original = Date.prototype.toISOString; Date.prototype.toISOString = function () { Date.prototype.toISOString = original; throw new Error('injected commit failure'); }; })()`);
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: inkStart.x + 230, y: inkStart.y + 100, button: 'left', clickCount: 1 });
+    const failedCommit = await cdp.evaluate(`({ draft: !!document.querySelector('[data-annotation-id="preview"]'), saved: document.querySelectorAll('#annotation-list .annotation-entry').length, error: document.querySelector('#toast').textContent, retry: !document.querySelector('#annotation-retry').hidden, pointerEvents: window.readerDiagnostics.pointerEvents })`);
+    assert.ok(failedCommit.draft && failedCommit.saved === 1 && failedCommit.retry && /annotation.*save/i.test(failedCommit.error), `ANNOT-030/031: failed commit retains its visible draft, reports an error and offers Retry: ${JSON.stringify(failedCommit)}`);
+    assert.ok(failedCommit.pointerEvents.length > 0 && failedCommit.pointerEvents.length <= 100 && failedCommit.pointerEvents.some(item => item.type === 'pointerup') && !JSON.stringify(failedCommit.pointerEvents).includes('Reader preserves'), 'ANNOT-032: opt-in pointer trace is bounded and contains no document text');
+    await cdp.evaluate(`document.querySelector('#annotation-retry').click(); window.readerDiagnostics.enablePointerTrace(false)`);
+    assert.ok(await cdp.evaluate(`document.querySelectorAll('#annotation-list .annotation-entry').length === 2 && document.querySelectorAll('.review-overlay [data-annotation-id]').length === 2 && !document.querySelector('[data-annotation-id="preview"]')`), 'ANNOT-030/031: Retry atomically replaces the draft with a saved mark');
+    await cdp.evaluate(`document.querySelector('#annotation-undo').click()`);
     await cdp.evaluate(`document.querySelector('#annotation-tool').value = 'select'; document.querySelector('.review-overlay').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', pointerId: 101, button: 0, clientX: ${inkStart.x + 160}, clientY: ${inkStart.y + 100} }))`);
     assert.equal(await cdp.evaluate(`document.querySelectorAll('.review-overlay [data-annotation-id]').length`), 1, 'ANNOT-028: completed desktop stroke remains after clicking off');
     await cdp.evaluate(`document.querySelector('#annotation-undo').click()`);
@@ -307,9 +347,51 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     const layoutRuntime = await cdp.evaluate('({ error: window.readerDiagnostics.layoutError, metrics: window.readerDiagnostics.layoutMetrics[0] })');
     assert.ok(!layoutRuntime.error && layoutRuntime.metrics?.modelBytes === 4917852 && ['wasm', 'webgpu'].includes(layoutRuntime.metrics.provider), `LAYOUT-ML-003: browser-local ONNX runtime loads: ${layoutRuntime.error || JSON.stringify(layoutRuntime)}; ${cdp.logs.slice(-8).join(' | ')}`);
     console.log(`LAYOUT-ML-003 measured ${JSON.stringify(layoutRuntime.metrics)}`);
+    assert.ok(!cdp.network.some(request => /\/tts\//.test(request.url)), 'TTS-LOCAL-003: neural assets are absent before explicit selection and Play');
+    await cdp.evaluate(`(() => { const voice = document.querySelector('#voice-select'); voice.value = 'neural:en'; voice.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    assert.ok(!cdp.network.some(request => /\/tts\//.test(request.url)), 'TTS-LOCAL-003: selecting the option alone does not fetch model assets');
+    await cdp.evaluate(`document.querySelector('#speak-button').click()`);
+    await until(() => cdp.evaluate(`window.readerDiagnostics.neuralMetrics.initializationMs !== null || /unavailable/.test(document.querySelector('#speech-status').textContent)`), 60000)
+      .catch(async error => { throw new Error(`${error.message}; neural=${JSON.stringify(await cdp.evaluate('window.readerDiagnostics.neuralMetrics'))}; ${cdp.logs.slice(-8).join(' | ')}`); });
+    const neural = await cdp.evaluate(`({ metrics: window.readerDiagnostics.neuralMetrics, status: document.querySelector('#speech-status').textContent, toast: document.querySelector('#toast').textContent, speaking: window.readerDiagnostics.interaction.speaking })`);
+    assert.ok(neural.metrics.initializationMs !== null && neural.speaking, `TTS-LOCAL-002/003/018: local WASM voice starts: ${JSON.stringify(neural)}; ${cdp.logs.slice(-8).join(' | ')}`);
+    await until(() => cdp.evaluate(`window.readerDiagnostics.neuralMetrics.synthesis.length > 0`), 30000);
+    assert.ok(cdp.network.some(request => /\/tts\/en\/model\.onnx/.test(request.url)) && cdp.network.every(request => !/https?:\/\//.test(request.url) || new URL(request.url).origin === `http://127.0.0.1:${port}`), 'TTS-LOCAL-004: neural model and speech remain on Reader origin');
+    console.log(`TTS-LOCAL measured ${JSON.stringify(await cdp.evaluate('window.readerDiagnostics.neuralMetrics'))}`);
+    await cdp.evaluate(`(() => { for (let i = 0; i < 20; i++) document.querySelector('#previous-sentence').click(); })()`);
+    const neuralInteraction = await cdp.evaluate('window.readerDiagnostics.interaction');
+    assert.equal(neuralInteraction.speechIndex, 0, 'TTS-LOCAL-006: previous sentence clamps at the start');
+    assert.ok(neuralInteraction.rulerY != null && neuralInteraction.sourceRulerY != null, 'TTS-LOCAL-009/011/012: neural sentence highlight and both rulers follow source-linked speech');
+    assert.equal(await cdp.evaluate(`document.querySelectorAll('#reader-content .word.active').length`), 0, 'TTS-LOCAL-010: neural voice does not invent word timing');
+    await cdp.evaluate(`document.querySelector('#next-sentence').click()`);
+    const nextSentence = await cdp.evaluate('window.readerDiagnostics.interaction');
+    assert.ok(nextSentence.speaking && nextSentence.speechIndex === neuralInteraction.speechIndex + 1, `TTS-LOCAL-006: next sentence preserves local neural playback: ${JSON.stringify({ neuralInteraction, nextSentence })}`);
+    await cdp.evaluate(`document.querySelector('#previous-sentence').click()`);
+    assert.equal((await cdp.evaluate('window.readerDiagnostics.interaction')).speechIndex, neuralInteraction.speechIndex, 'TTS-LOCAL-006: previous sentence restores logical position');
+    await cdp.evaluate(`document.querySelector('#next-paragraph').click()`);
+    const nextParagraph = await cdp.evaluate('window.readerDiagnostics.interaction');
+    assert.ok(nextParagraph.speechIndex > neuralInteraction.speechIndex, 'TTS-LOCAL-007: next paragraph advances to another block');
+    await cdp.evaluate(`document.querySelector('#previous-paragraph').click()`);
+    assert.equal((await cdp.evaluate('window.readerDiagnostics.interaction')).speechIndex, neuralInteraction.speechIndex, 'TTS-LOCAL-007: previous paragraph restores logical position');
+    await delay(350); // let speech-follow settle after the preceding navigation
+    const beforeDefinition = await cdp.evaluate('window.readerDiagnostics.interaction');
+    await cdp.evaluate(`(() => { const word = document.querySelector('#reader-content .word'); word.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); word.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 })); word.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 })); })()`);
+    await until(() => cdp.evaluate(`!document.querySelector('#dictionary-panel').hidden`));
+    assert.deepEqual(await cdp.evaluate('window.readerDiagnostics.interaction'), beforeDefinition, 'TTS-LOCAL-013: word definition during neural playback leaves speech and ruler state untouched');
+    await cdp.evaluate(`document.querySelector('#dictionary-close').click()`);
+    await cdp.evaluate(`document.querySelector('#speak-button').click()`); // pause
+    assert.equal((await cdp.evaluate('window.readerDiagnostics.interaction')).paused, true, 'TTS-LOCAL-005: neural speech pauses');
+    await cdp.evaluate(`document.querySelector('#speak-button').click()`); // resume
+    assert.equal((await cdp.evaluate('window.readerDiagnostics.interaction')).paused, false, 'TTS-LOCAL-005: neural speech resumes');
+    await cdp.evaluate(`document.querySelector('#stop-speech').click()`);
+    assert.ok(await cdp.evaluate(`!window.readerDiagnostics.interaction.speaking && document.querySelector('#speak-button').textContent === 'Play'`), 'TTS-LOCAL-005: Stop cancels neural playback and returns to Play');
     const unexpectedRequests = cdp.network.filter(request => request.method !== 'GET' ||
-      /Review comment|Reader preserves|Figure and Table Preservation|Source-Faithful Reading/i.test(request.url) || request.postData);
-    assert.deepEqual(unexpectedRequests, [], 'ANNOT-024/PRIVACY-REGRESSION: document and mark contents never enter network requests');
+      /Review comment|Reader preserves|Figure and Table Preservation|Source-Faithful Reading|Paragraph|sentence/i.test(request.url) || request.postData);
+    assert.deepEqual(unexpectedRequests, [], 'ANNOT-024/TTS-LOCAL-004/PRIVACY-REGRESSION: document, annotation and speech contents never enter network requests');
+    await cdp.evaluate(`document.querySelector('#speak-button').click()`);
+    assert.equal((await cdp.evaluate('window.readerDiagnostics.interaction')).speaking, true, 'TTS-LOCAL-019: neural voice can restart after Stop');
+    await cdp.file(ordinary);
+    assert.ok(await cdp.evaluate(`!window.readerDiagnostics.interaction.speaking && document.querySelector('#speak-button').textContent === 'Play'`), 'TTS-LOCAL-019/020: opening another document cancels previous synthesis and speech state');
     if (process.env.READER_TEST_REAL_PDF) {
       await cdp.file(process.env.READER_TEST_REAL_PDF);
       await until(() => cdp.evaluate(`document.querySelectorAll('.page-shell').length > 1 && window.readerDiagnostics.pendingLayoutPages.length > 0`), 30000);

@@ -7,6 +7,7 @@ import { defineWord } from './dictionary/index.js';
 import { createClickArbiter } from './dictionary/click-arbitration.js';
 import { AnnotationStore, screenToPdfPoint } from './review/annotations.js';
 import { drawAnnotations } from './review/overlay.js';
+import { NeuralPlayer } from './speech/neural.js';
 
 const $ = id => document.getElementById(id);
 const sourceScroll = $('source-scroll');
@@ -25,19 +26,25 @@ const presets = {
 const state = {
   model: null, mode: 'local', zoom: 1, currentPage: 1, selected: null,
   searchMatches: [], matchIndex: -1, speechItems: [], speechIndex: 0,
-  speaking: false, paused: false, voice: null, localVoices: [],
+  speaking: false, paused: false, voice: null, localVoices: [], speechRun: 0,
   bookmarks: [], docKey: null, sourceObserver: null, cropObserver: null, renderTasks: new Map(),
   lastManualSource: 0, lastManualReader: 0, lastProgrammatic: 0, rulerY: null, sourceRulerY: null,
   generation: 0, fetchController: null, mobileReaderPosition: 0,
   originalPdfBytes: null, documentName: 'document.pdf', selectedAnnotation: null, reviewDraft: null,
   pendingLayoutRefresh: false, layoutMetrics: [], reviewTouchScroll: null,
-  activePenPointer: null, lastPenAt: 0
+  activePenPointer: null, lastPenAt: 0, reviewCommitFailed: false,
+  pointerTraceEnabled: false, pointerEvents: []
 };
 const reviewStore = new AnnotationStore();
+const neuralPlayer = new NeuralPlayer();
 let selectedDefinitionWord = '';
 // Read-only operational measurements contain no source or annotation content.
 window.readerDiagnostics = Object.freeze({
+  get secureContext() { return window.isSecureContext === true; },
+  get pointerEvents() { return state.pointerEvents.map(item => ({ ...item })); },
+  enablePointerTrace(enabled) { state.pointerTraceEnabled = Boolean(enabled); state.pointerEvents = []; },
   get layoutMetrics() { return state.layoutMetrics.map(item => ({ ...item })); },
+  get neuralMetrics() { return { initializationMs: neuralPlayer.metrics.initializationMs, synthesis: neuralPlayer.metrics.synthesis.map(item => ({ ...item })), jsHeapBytes: performance.memory?.usedJSHeapSize || null }; },
   get layoutError() { return state.layoutError || null; },
   get pendingLayoutPages() { return state.model?.pages.filter(page => page.needsLayoutInference).map(page => page.number) || []; },
   get layoutStarted() { return !!state.layoutStarted; },
@@ -119,6 +126,7 @@ async function closeDocument() {
   state.fetchController?.abort();
   state.fetchController = null;
   stopSpeech();
+  await neuralPlayer.dispose();
   state.sourceObserver?.disconnect();
   state.cropObserver?.disconnect();
   closeMobileOriginal();
@@ -296,6 +304,8 @@ function renderSource() {
     overlay.classList.add('review-overlay');
     overlay.setAttribute('aria-label', `Annotations on page ${page.number}`);
     shell.append(overlay);
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'gotpointercapture', 'lostpointercapture'])
+      overlay.addEventListener(type, event => recordReviewPointer(event, overlay));
     overlay.addEventListener('pointerdown', event => startAnnotation(event, page, overlay));
     overlay.addEventListener('pointermove', event => moveAnnotation(event, page, overlay));
     overlay.addEventListener('pointerup', event => finishAnnotation(event, page, overlay));
@@ -324,6 +334,16 @@ function renderSource() {
   }, { root: sourceScroll, rootMargin: '800px' });
   sourceContent.querySelectorAll('.page-shell').forEach(shell => state.sourceObserver.observe(shell));
 }
+function recordReviewPointer(event, overlay) {
+  if (!state.pointerTraceEnabled) return;
+  let captured = false;
+  try { captured = overlay.hasPointerCapture(event.pointerId); } catch { /* Capture may already have ended. */ }
+  state.pointerEvents.push({ type: event.type, pointerId: event.pointerId, pointerType: event.pointerType,
+    isPrimary: event.isPrimary, buttons: event.buttons, button: event.button,
+    width: event.width, height: event.height, pressure: event.pressure,
+    clientX: event.clientX, clientY: event.clientY, captured, timestamp: event.timeStamp });
+  if (state.pointerEvents.length > 100) state.pointerEvents.shift();
+}
 function renderOverlays() {
   if (!state.model || state.model.website) return;
   let annotations = reviewStore.visible ? reviewStore.list() : [];
@@ -349,6 +369,7 @@ function translateGeometry(geometry, dx, dy) {
 }
 function startAnnotation(event, page, overlay) {
   if (!document.body.classList.contains('review-mode') || isMobile()) return;
+  if (state.reviewCommitFailed) { toast('An unsaved stroke remains. Retry saving it before drawing another.', 7000); return; }
   if (event.pointerType === 'touch') {
     // A broad contact, or any contact near a current stylus stroke, is a palm.
     // An intentional lone finger drag scrolls the original source pane.
@@ -409,6 +430,7 @@ function moveAnnotation(event, page, overlay) {
   renderOverlays();
 }
 function finishAnnotation(event, page, overlay, cancelled = false) {
+  if (state.reviewCommitFailed) return;
   if (event.pointerType === 'touch') {
     if (state.reviewTouchScroll?.pointerId === event.pointerId) state.reviewTouchScroll = null;
     return;
@@ -421,23 +443,42 @@ function finishAnnotation(event, page, overlay, cancelled = false) {
   if (!draft || draft.pointerId !== event.pointerId || draft.page !== page.number) return;
   event.preventDefault(); event.stopPropagation();
   if (!cancelled) moveAnnotation(event, page, overlay);
-  state.reviewDraft = null;
+  commitReviewDraft();
+}
+function commitReviewDraft() {
+  const draft = state.reviewDraft;
+  if (!draft) return;
   if (draft.moving) {
-    if (JSON.stringify(draft.preview.geometry) !== JSON.stringify(draft.original.geometry)) reviewStore.update(draft.id, { geometry: draft.preview.geometry });
+    try {
+      if (JSON.stringify(draft.preview.geometry) !== JSON.stringify(draft.original.geometry) &&
+        !reviewStore.update(draft.id, { geometry: draft.preview.geometry })) throw new Error('Annotation is missing');
+    } catch { annotationCommitFailed(); return; }
   } else {
     const item = draft.preview;
-    if (item.type === 'freetext') {
+    if (item.type === 'freetext' && !item.text) {
       const text = prompt('Text for this source annotation:');
-      if (!text?.trim()) { renderOverlays(); return; }
+      if (!text?.trim()) { state.reviewDraft = null; renderOverlays(); return; }
       item.text = text.trim().slice(0, 2000);
     }
     if (item.type !== 'ink' && (Math.abs(item.geometry.rect.x2 - item.geometry.rect.x1) < 2 || Math.abs(item.geometry.rect.y2 - item.geometry.rect.y1) < 2)) {
-      renderOverlays(); return;
+      state.reviewDraft = null; renderOverlays(); return;
     }
-    delete item.id;
-    addReviewAnnotation(item);
+    try {
+      const { id: _draftId, ...permanent } = item;
+      const created = reviewStore.add({ ...permanent, sourceAnchor: { page: item.page } });
+      state.selectedAnnotation = created.id;
+    } catch { annotationCommitFailed(); return; }
   }
+  state.reviewDraft = null;
+  state.reviewCommitFailed = false;
+  $('annotation-retry').hidden = true;
   renderOverlays(); renderAnnotationList();
+}
+function annotationCommitFailed() {
+  state.reviewCommitFailed = true;
+  $('annotation-retry').hidden = false;
+  toast('Annotation could not be saved. The stroke remains visible; choose Retry saving stroke.', 9000);
+  renderOverlays();
 }
 function cancelAnnotationPointer(event, page, overlay) {
   if (event.pointerType === 'touch') {
@@ -497,6 +538,8 @@ function setReviewMode(enabled) {
   $('review-mode-button').setAttribute('aria-pressed', String(enabled));
   $('review-mode-button').textContent = enabled ? 'Read mode' : 'Review mode';
   state.reviewDraft = null;
+  state.reviewCommitFailed = false;
+  $('annotation-retry').hidden = true;
   renderOverlays();
 }
 async function renderPage(number) {
@@ -587,7 +630,7 @@ function renderAccessible() {
           if (!element.isConnected) return;
           if (sentence) state.speechIndex = state.speechItems.findIndex(item => item.element === sentence);
           focusBlock(block, 'reader');
-          if (sentence && state.localVoices.length) startSpeech(Math.max(0, state.speechIndex));
+          if (sentence && $('voice-select').value) startSpeech(Math.max(0, state.speechIndex));
         },
         onDefine: word => {
           const token = word.textContent.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
@@ -610,9 +653,9 @@ function renderAccessible() {
   }
   state.speechItems = collectSpeechItems();
   updateReadingProgress();
-  $('speak-button').disabled = !state.localVoices.length || !state.speechItems.length;
+  $('speak-button').disabled = !state.speechItems.length || (!$('voice-select').value && !state.localVoices.length);
   if (!state.speechItems.length) $('speech-status').textContent = 'No readable text for speech';
-  else if (state.localVoices.length) $('speech-status').textContent = 'Device voice · no cloud TTS';
+  else $('speech-status').textContent = $('voice-select').value === 'neural:en' ? 'Local neural voice · no cloud TTS' : 'Device voice · no cloud TTS';
   if (state.selected) readerContent.querySelector(`[data-id="${state.selected.id}"]`)?.classList.add('selected');
   for (const page of state.model.pages) {
     const canvas = sourceContent.querySelector(`[data-page="${page.number}"] canvas`);
@@ -747,7 +790,10 @@ function openMobileOriginal(block = null) {
   if (anchor) focusBlock(anchor, 'reader');
   if (anchor && !state.model.website) renderPage(anchor.page);
   updateRuler();
-  if (state.speaking && setting('speech-follow-ruler')) setTimeout(() => moveSourceRulerToBlock(state.speechItems[state.speechIndex]?.block), 250);
+  if (state.speaking && setting('speech-follow-ruler')) {
+    const run = state.speechRun;
+    setTimeout(() => { if (run === state.speechRun && state.speaking) moveSourceRulerToBlock(state.speechItems[state.speechIndex]?.block); }, 250);
+  }
 }
 function closeMobileOriginal({ restore = true } = {}) {
   if (!document.body.classList.contains('mobile-original-open')) return;
@@ -870,34 +916,32 @@ function moveSearch(delta) {
 }
 
 function stopSpeech() {
-  speech?.cancel(); state.speaking = false; state.paused = false;
+  ++state.speechRun;
+  speech?.cancel(); neuralPlayer.stop(); state.speaking = false; state.paused = false;
   $('speak-button').textContent = 'Play';
   readerContent.querySelectorAll('.sentence.active,.word.active,.block.active').forEach(el => el.classList.remove('active'));
   if (state.pendingLayoutRefresh) refreshAfterLayoutRefinement();
 }
 function refreshVoices() {
-  if (!speech) {
-    for (const id of ['voice-select', 'mobile-voice-select']) $(id).replaceChildren(new Option('Speech unavailable', ''));
-    return;
-  }
-  state.localVoices = speech.getVoices().filter(voice => voice.localService === true);
+  const selected = $('voice-select').value;
+  state.localVoices = speech?.getVoices().filter(voice => voice.localService === true) || [];
   const selects = [$('voice-select'), $('mobile-voice-select')];
   selects.forEach(select => select.replaceChildren());
   if (!state.localVoices.length) {
-    selects.forEach(select => select.add(new Option('No verified local voices', '')));
-    $('speech-status').textContent = 'Speech disabled: no verified device voice';
-    $('speak-button').disabled = true;
+    selects.forEach(select => select.add(new Option('No verified device voice', '')));
   } else {
-    state.localVoices.forEach((voice, index) => selects.forEach(select => select.add(new Option(`${voice.name} (${voice.lang}) · device`, String(index)))));
-    const preferred = state.localVoices.findIndex(voice => voice.default);
-    selects.forEach(select => { select.value = String(Math.max(0, preferred)); });
-    $('speech-status').textContent = state.model ? 'Device voice · no cloud TTS' : 'Open a document to use speech';
-    $('speak-button').disabled = !state.model || !state.speechItems.length;
+    state.localVoices.forEach((voice, index) => selects.forEach(select => select.add(new Option(`${voice.name} (${voice.lang}) · device local`, String(index)))));
   }
+  selects.forEach(select => select.add(new Option('English neural voice · local model', 'neural:en')));
+  const preferred = state.localVoices.findIndex(voice => voice.default);
+  const value = selected === 'neural:en' ? selected : (state.localVoices.length ? (/^\d+$/.test(selected) && Number(selected) < state.localVoices.length ? selected : String(Math.max(0, preferred))) : '');
+  selects.forEach(select => { select.value = value; });
+  $('speech-status').textContent = state.model ? (value === 'neural:en' ? 'Local neural voice · no cloud TTS' : value ? 'Device voice · no cloud TTS' : 'Choose a local voice for speech') : 'Open a document to use speech';
+  $('speak-button').disabled = !state.model || !state.speechItems.length || !value;
 }
 function startSpeech(index = state.speechIndex) {
-  if (!state.localVoices.length || !state.speechItems.length) return;
-  speech.cancel();
+  if (!state.speechItems.length) return;
+  stopSpeech();
   state.speechIndex = Math.max(0, Math.min(index, state.speechItems.length - 1));
   state.speaking = true; state.paused = false;
   speakCurrent();
@@ -905,16 +949,36 @@ function startSpeech(index = state.speechIndex) {
 function speakCurrent() {
   const item = state.speechItems[state.speechIndex];
   if (!item || !state.speaking) { stopSpeech(); return; }
-  const voice = state.localVoices[Number($('voice-select').value)] || state.localVoices[0];
-  if (!voice || voice.localService !== true) { stopSpeech(); return; }
+  const neural = $('voice-select').value === 'neural:en';
+  const voice = neural ? null : state.localVoices[Number($('voice-select').value)] || state.localVoices[0];
+  if (!neural && (!voice || voice.localService !== true)) { stopSpeech(); return; }
   readerContent.querySelectorAll('.sentence.active,.word.active,.block.active').forEach(el => el.classList.remove('active'));
   item.element?.classList.add('active');
   focusBlock(item.block, 'reader', true);
   item.element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const run = state.speechRun;
   if (setting('speech-follow-ruler')) setTimeout(() => {
+    if (run !== state.speechRun || !state.speaking || state.speechItems[state.speechIndex] !== item) return;
     if (item.element) moveRulerToElement(item.element);
     moveSourceRulerToBlock(item.block);
   }, 250);
+  $('speak-button').textContent = 'Pause';
+  if (neural) {
+    $('speech-status').textContent = 'Preparing local neural speech…';
+    const nextText = state.speechItems[state.speechIndex + 1]?.text || null;
+    neuralPlayer.play(item.text, { rate: Number($('speech-rate').value) || 1, nextText, onEnd: () => {
+      if (run !== state.speechRun || !state.speaking) return;
+      state.speechIndex++; speakCurrent();
+    } }).then(() => {
+      if (run === state.speechRun) $('speech-status').textContent = 'Local neural voice · sentence highlighting';
+    }).catch(error => {
+      if (run !== state.speechRun) return;
+      stopSpeech();
+      $('speech-status').textContent = 'Local neural voice unavailable; choose a device voice';
+      toast(`Local neural speech could not start: ${error.message || error}`, 9000);
+    });
+    return;
+  }
   const utterance = new SpeechSynthesisUtterance(item.text);
   utterance.voice = voice; utterance.lang = voice.lang; utterance.rate = Number($('speech-rate').value) || 1;
   utterance.onboundary = event => {
@@ -925,15 +989,14 @@ function speakCurrent() {
     if (item.element && setting('speech-follow-ruler')) moveRulerToElement(item.element);
     if (setting('speech-follow-ruler')) moveSourceRulerToBlock(item.block);
   };
-  utterance.onend = () => { if (state.speaking && !state.paused) { state.speechIndex++; speakCurrent(); } };
-  utterance.onerror = () => { stopSpeech(); $('speech-status').textContent = 'Device speech stopped'; };
-  $('speak-button').textContent = 'Pause';
+  utterance.onend = () => { if (run === state.speechRun && state.speaking && !state.paused) { state.speechIndex++; speakCurrent(); } };
+  utterance.onerror = () => { if (run !== state.speechRun) return; stopSpeech(); $('speech-status').textContent = 'Device speech stopped'; };
   speech.speak(utterance);
 }
 function toggleSpeech() {
   if (!state.speaking) startSpeech();
-  else if (state.paused) { speech.resume(); state.paused = false; $('speak-button').textContent = 'Pause'; }
-  else { speech.pause(); state.paused = true; $('speak-button').textContent = 'Resume'; }
+  else if (state.paused) { if ($('voice-select').value === 'neural:en') neuralPlayer.resume(); else speech.resume(); state.paused = false; $('speak-button').textContent = 'Pause'; }
+  else { if ($('voice-select').value === 'neural:en') neuralPlayer.pause(); else speech.pause(); state.paused = true; $('speak-button').textContent = 'Resume'; }
 }
 function moveSpeech(direction, unit) {
   if (!state.speechItems.length) return;
@@ -941,6 +1004,10 @@ function moveSpeech(direction, unit) {
   if (unit === 'paragraph') {
     const current = state.speechItems[state.speechIndex]?.block.id;
     while (next >= 0 && next < state.speechItems.length && state.speechItems[next].block.id === current) next += direction;
+    if (direction < 0 && next >= 0) {
+      const previous = state.speechItems[next].block.id;
+      while (next > 0 && state.speechItems[next - 1].block.id === previous) next--;
+    }
   }
   startSpeech(Math.max(0, Math.min(next, state.speechItems.length - 1)));
 }
@@ -1017,6 +1084,7 @@ function setupEvents() {
   $('focus-button').addEventListener('click', () => setFocusMode(true));
   $('focus-exit').addEventListener('click', () => setFocusMode(false));
   $('review-mode-button').addEventListener('click', () => setReviewMode(!document.body.classList.contains('review-mode')));
+  $('annotation-retry').addEventListener('click', commitReviewDraft);
   $('annotation-tool').addEventListener('change', () => {
     if ($('annotation-tool').value === 'highlight' && $('annotation-color').value === '#b91c1c') $('annotation-color').value = '#facc15';
     if ($('annotation-tool').value === 'ink' && $('annotation-color').value === '#facc15') $('annotation-color').value = '#b91c1c';
@@ -1072,12 +1140,15 @@ function setupEvents() {
   });
   $('bookmark-button').addEventListener('click', addBookmark);
   $('speak-button').addEventListener('click', toggleSpeech);
+  $('stop-speech').addEventListener('click', stopSpeech);
   $('previous-sentence').addEventListener('click', () => moveSpeech(-1, 'sentence'));
   $('next-sentence').addEventListener('click', () => moveSpeech(1, 'sentence'));
   $('previous-paragraph').addEventListener('click', () => moveSpeech(-1, 'paragraph'));
   $('next-paragraph').addEventListener('click', () => moveSpeech(1, 'paragraph'));
   for (const id of ['voice-select', 'mobile-voice-select']) $(id).addEventListener('change', event => {
     $(id === 'voice-select' ? 'mobile-voice-select' : 'voice-select').value = event.target.value;
+    $('speak-button').disabled = !state.speechItems.length || !event.target.value;
+    $('speech-status').textContent = event.target.value === 'neural:en' ? 'Local neural voice · loads on Play' : event.target.value ? 'Device voice · no cloud TTS' : 'Choose a local voice for speech';
     if (state.speaking) startSpeech();
   });
   speech?.addEventListener?.('voiceschanged', refreshVoices);

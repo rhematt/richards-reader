@@ -199,11 +199,11 @@ fieldset label input[type='checkbox'] { margin-left: auto; }
   .mobile-source-controls span, .mobile-source-controls output { font-size: .8rem; white-space: nowrap; }
   .source-content { padding: 1.5rem .6rem; }
   .source-content.has-pages { width: max-content; min-width: 100%; }
-  .speechbar { display: grid; grid-template-columns: 44px minmax(54px, 1fr) 44px auto 44px; gap: .2rem; min-height: 3.5rem; padding: .25rem .45rem max(.25rem, env(safe-area-inset-bottom)); }
+  .speechbar { display: grid; grid-template-columns: 44px minmax(54px, 1fr) 44px 44px auto 44px; gap: .2rem; min-height: 3.5rem; padding: .25rem .45rem max(.25rem, env(safe-area-inset-bottom)); }
   .speechbar { position: relative; }
   .reading-progress { position: absolute; right: .55rem; bottom: calc(100% + .2rem); background: var(--reader-bg, #fffdf8); padding: .1rem .3rem; border-radius: 4px; }
   .dictionary-panel { right: .4rem; bottom: calc(4.2rem + env(safe-area-inset-bottom)); }
-  body.focus-mode .speechbar { grid-template-columns: 44px minmax(54px, 1fr) 44px auto; }
+  body.focus-mode .speechbar { grid-template-columns: 44px minmax(54px, 1fr) 44px 44px auto; }
   .speechbar button { min-width: 44px; min-height: 44px; padding: .2rem .35rem; }
   #previous-sentence, #next-sentence { font-size: 0; }
   #previous-sentence::after { content: '‹'; font-size: 1.3rem; }
