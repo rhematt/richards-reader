@@ -20,8 +20,20 @@ function annotationDictionary(context, item) {
     const points = item.geometry.paths.flat();
     const xs = points.map(point => point.x), ys = points.map(point => point.y);
     const width = Math.max(.5, Number(item.appearance?.width) || 2);
+    const x1 = Math.min(...xs) - width, y1 = Math.min(...ys) - width;
+    const x2 = Math.max(...xs) + width, y2 = Math.max(...ys) + width;
+    const [red, green, blue] = color(item.appearance?.color);
+    // PDF viewers do not consistently synthesize an appearance from InkList.
+    // Keep the standard Ink annotation and provide its stroked normal appearance.
+    const strokes = item.geometry.paths.filter(path => path.length).map(path =>
+      `${path[0].x - x1} ${path[0].y - y1} m\n${path.slice(1).map(point =>
+        `${point.x - x1} ${point.y - y1} l`).join('\n')}\nS`).join('\n');
+    const appearance = context.register(context.stream(
+      `q\n${red} ${green} ${blue} RG\n${width} w\n1 J\n1 j\n${strokes}\nQ\n`,
+      { Type: PDFName.of('XObject'), Subtype: PDFName.of('Form'), FormType: 1,
+        BBox: [0, 0, x2 - x1, y2 - y1], Matrix: [1, 0, 0, 1, 0, 0], Resources: {} }));
     return context.obj({ ...common, Subtype: PDFName.of('Ink'),
-      Rect: [Math.min(...xs) - width, Math.min(...ys) - width, Math.max(...xs) + width, Math.max(...ys) + width],
+      Rect: [x1, y1, x2, y2], AP: { N: appearance },
       InkList: item.geometry.paths.map(path => path.flatMap(point => [point.x, point.y])),
       BS: { Type: PDFName.of('Border'), W: width, S: PDFName.of('S') } });
   }

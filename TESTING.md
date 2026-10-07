@@ -137,7 +137,24 @@ changes and simulated broad palm contact during stylus drawing. Actual Pencil
 and finger behaviour remains a real iPad gate. The PDF export suite covers ANNOT-001…004, 006/007,
 009/010…024, 026/027 to varying depths; see individual assertions before
 claiming full acceptance. Standard PDF annotations and source text are
-preserved on PDF.js reopening. Preview and Acrobat checks remain pending.
+preserved on PDF.js reopening. macOS Preview was checked with a synthetic
+export; Acrobat remains pending.
+
+An independent synthetic export check on 7 Oct used Poppler 25.06 (`pdfinfo`,
+`pdftotext`, `pdftoppm`) and bundled `pypdf`. Poppler opened the one-page PDF
+1.7 file, extracted all original paragraph text, and rendered visible ink,
+highlight, comment icon and free-text annotations without flattening the
+source page. `pypdf` independently read `/Ink`, `/Highlight`, `/Text` and
+`/FreeText` entries, their PDF-coordinate rectangles and both comment strings.
+After the Mac was unlocked, Preview opened the same synthetic export. It
+displayed the highlight, anchored comment and free-text box, listed the
+comment text, and exposed the original page text. Preview initially omitted
+the red ink stroke even though the `/Ink` object was present. The exporter now
+writes an explicit normal appearance stream for ink; reopening the refreshed
+export in Preview visibly rendered the complete stroke. ANNOT-018…023 now
+asserts that the appearance stream contains a stroked path. This synthetic
+Preview interoperability check passes; Adobe Acrobat was unavailable and
+remains unverified. The temporary export is removed after inspection.
 
 Headless Edge production measurement on a synthetic visual page: ONNX model
 4,917,852 bytes; WASM initialization about 180–195 ms; page inference about

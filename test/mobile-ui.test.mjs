@@ -195,6 +195,8 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     assert.ok(touchResult.top > touchGrip.top + 15, 'MOBILE-004: touch drag moves grip');
     assert.equal(touchResult.scroll, touchGrip.scroll, 'MOBILE-004: touch grip does not scroll document');
     await cdp.evaluate(`document.querySelector('#mobile-original-button').click()`);
+    const rulerAppearance = await cdp.evaluate(`(() => { const a = document.querySelector('#ruler'), s = document.querySelector('#source-ruler'); return { aHeight: a.getBoundingClientRect().height, sHeight: s.getBoundingClientRect().height, aBackground: getComputedStyle(a).backgroundColor, sBackground: getComputedStyle(s).backgroundColor }; })()`);
+    assert.ok(Math.abs(rulerAppearance.aHeight - rulerAppearance.sHeight) <= 1 && rulerAppearance.aBackground === rulerAppearance.sBackground, `RULER-003: source and accessible rulers share configured appearance: ${JSON.stringify(rulerAppearance)}`);
     const sourceRuler = await cdp.evaluate(`(() => { const ruler = document.querySelector('#source-ruler'); const source = document.querySelector('#source-scroll'); return { position: getComputedStyle(ruler).position, top: ruler.getBoundingClientRect().top, grip: !!document.querySelector('#source-ruler-grip'), scroll: source.scrollTop }; })()`);
     assert.equal(sourceRuler.position, 'fixed', 'RULER-009: mobile Original drawer uses a viewport ruler');
     assert.ok(sourceRuler.grip, 'RULER-009: source ruler has a touch grip');
@@ -208,6 +210,11 @@ test('MOBILE-001..010: phone surfaces, options, source drawer, ruler and tablet 
     assert.ok(sourceMoved.top > sourceRuler.top + 15, 'RULER-009/010: source grip moves its ruler');
     assert.equal(sourceMoved.scroll, sourceGrip.scroll, 'RULER-010: source grip does not scroll PDF');
     assert.equal(sourceMoved.readerTop, sourceGrip.readerTop, 'RULER-004: source grip leaves accessible ruler alone');
+    await cdp.evaluate(`document.querySelector('#mobile-zoom-in').click()`);
+    assert.ok(Math.abs((await cdp.evaluate(`document.querySelector('#source-ruler').getBoundingClientRect().top`)) - sourceMoved.top) <= 1, 'RULER-013: source ruler remains a viewport overlay after zoom');
+    await cdp.evaluate(`document.querySelector('#ruler-mode').value = 'off'; document.querySelector('#ruler-mode').dispatchEvent(new Event('change', { bubbles: true }))`);
+    assert.ok(await cdp.evaluate(`document.querySelector('#source-ruler').hidden && document.querySelector('#ruler').hidden`), 'RULER-011: Off disables both rulers');
+    await cdp.evaluate(`document.querySelector('#ruler-mode').value = 'line'; document.querySelector('#ruler-mode').dispatchEvent(new Event('change', { bubbles: true }))`);
     await cdp.evaluate(`document.querySelector('#mobile-original-close').click()`);
 
     await cdp.evaluate(`document.querySelector('#mobile-settings-button').click()`);

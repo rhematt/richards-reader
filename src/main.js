@@ -948,7 +948,7 @@ function moveSpeech(direction, unit) {
 function updateRuler() {
   const mode = setting('ruler-mode');
   const lineHeight = parseFloat(getComputedStyle(readerContent).lineHeight) || 30;
-  for (const [id, scroll, key, height] of [['ruler', readerScroll, 'rulerY', lineHeight], ['source-ruler', sourceScroll, 'sourceRulerY', 28]]) {
+  for (const [id, scroll, key, height] of [['ruler', readerScroll, 'rulerY', lineHeight], ['source-ruler', sourceScroll, 'sourceRulerY', lineHeight]]) {
     const ruler = $(id);
     ruler.hidden = mode === 'off' || (id === 'source-ruler' && (!state.model || state.model.website));
     ruler.classList.toggle('dim', mode === 'dim');

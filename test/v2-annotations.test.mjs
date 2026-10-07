@@ -4,7 +4,7 @@ import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import { ordinaryPdf } from './pdf-fixture.mjs';
 import { AnnotationStore, screenToPdfPoint, pdfToScreenPoint } from '../src/review/annotations.js';
 import { exportMarkedPdf } from '../src/review/export.js';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 
 Uint8Array.prototype.toHex ??= function () { return Buffer.from(this).toString('hex'); };
 Map.prototype.getOrInsertComputed ??= function (key, callback) {
@@ -88,6 +88,7 @@ test('ANNOT-018..023: marked export is valid, searchable, coordinate-correct and
   ];
   const exported = await exportMarkedPdf(source, annotations);
   const twice = await exportMarkedPdf(source, annotations);
+  const reopened = await PDFDocument.load(exported.slice());
   assert.equal(Buffer.from(source).toString('hex'), before, 'original bytes unchanged');
   for (const bytes of [exported, twice]) {
     assert.ok(bytes.length > source.length, 'new PDF contains annotations');
@@ -102,4 +103,7 @@ test('ANNOT-018..023: marked export is valid, searchable, coordinate-correct and
       assert.ok(notes.some(note => Math.abs(note.rect[0] - 50) < 2), 'source coordinates survive export');
     } finally { await task.destroy(); }
   }
+  const ink = reopened.getPage(0).node.normalizedEntries().Annots.lookup(0, PDFDict);
+  const normalAppearance = ink.lookup(PDFName.of('AP'), PDFDict).lookup(PDFName.of('N'), PDFRawStream);
+  assert.match(normalAppearance.getContentsString(), /\bm\b[\s\S]*\bl\b[\s\S]*\bS\b/, 'ink has an explicit stroked appearance for Preview interoperability');
 });
