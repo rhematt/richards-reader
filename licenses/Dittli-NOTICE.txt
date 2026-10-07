@@ -1,0 +1,7 @@
+Dittli TTS
+Copyright 2026 Dittli TTS contributors
+
+This product is based on TinyTTS:
+ https://github.com/tronghieuit/tiny-tts
+ Copyright 2025 tronghieuit
+ Licensed under the Apache License, Version 2.0

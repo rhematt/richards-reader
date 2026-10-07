@@ -1,7 +1,7 @@
 # Richard's Reader
 
 **Richard's Reader is a local-first, dual-view accessibility reader. It can run
-as a local web server or as a LAN service at `http://reader.local/`. Documents
+as a local web server or as a LAN service at `https://reader.local/`. Documents
 stay in the browser on the device that opens them.**
 
 On desktop and iPad, Reader shows the original PDF beside a reflowed reading
@@ -12,7 +12,8 @@ application files only; it has no document upload, storage, OCR, TTS,
 analytics, or URL-proxy endpoint.
 
 It supports local PDFs, source-linked navigation and search, reading controls,
-and speech using verified device voices. Reader targets current iPadOS Safari
+verified device speech by default, and an optional browser-local neural voice.
+Reader targets current iPadOS Safari
 and Edge, plus desktop Safari and Chromium-based browsers. Phone layout tests
 are automated; an actual iPhone Safari result is still pending. See
 [TESTING.md](TESTING.md) for tested cases and browser limits.
@@ -32,13 +33,13 @@ npm run build
 npm start
 ```
 
-`npm start` prints the current LAN URL and `http://reader.local:4173/`. It
-starts Reader as an ordinary user process and advertises `reader.local` with
-Bonjour. Ctrl-C stops both the server and the advertisement. Do not use
-`sudo`. Run `npm test` separately when checking a build or making changes.
+`npm start` runs the application server on `127.0.0.1:4173` and advertises
+`reader.local` with Bonjour. Caddy serves the canonical LAN URL
+`https://reader.local/`. Ctrl-C stops both the server and advertisement. Do
+not use `sudo` for Reader. Run `npm test` separately when checking a build.
 
-Open `http://localhost:4173/` on the Mac or `http://reader.local:4173/` on
-another LAN device. A separate Caddy service provides the port-free URL.
+Open `https://reader.local/` on a device that trusts this installation's Caddy
+local root CA. Configure Caddy and device trust as described below.
 `npm run dev` starts Vite for source development. Use the production build for
 normal LAN use; its server applies Reader's Content Security Policy.
 
@@ -65,9 +66,8 @@ port as well, for example `PORT=4184 HOST=127.0.0.1 node server.mjs`.
 
 | Setup | Availability | URL |
 | --- | --- | --- |
-| `npm start` in a terminal | Until the terminal session ends | `http://reader.local:4173/` |
-| Reader LaunchAgent | Automatically after user login, while the Mac is awake | `http://reader.local:4173/` |
-| Caddy system service + Reader LaunchAgent | Port-free access after user login, while the Mac is awake | `http://reader.local/` |
+| `npm start` with Caddy | Until the terminal session ends | `https://reader.local/` |
+| Caddy system service + Reader LaunchAgent | After user login, while the Mac is awake | `https://reader.local/` |
 
 Choose **Open PDF**, drop a local PDF onto the source pane, or enter a public
 URL. A direct URL can be opened with either `/?url=<encoded URL>` or
@@ -77,37 +77,38 @@ mode does not connect to remote sites.
 
 ## LAN access and `reader.local`
 
-1. Keep the Mac and iPad on the same LAN. Allow incoming connections to Node.js
+1. Keep the Mac and iPad on the same LAN. Allow incoming connections to Caddy
    in the Mac firewall if prompted, and ensure the router allows devices to
    reach each other. Run `npm start`; the printed LAN IP requires no DHCP
    reservation or configuration change.
-2. Open the printed LAN URL or `http://reader.local:4173/` on the iPad. The
+2. Open `https://reader.local/` on the iPad after installing and trusting the
+   local CA as described below. The
    launcher uses the interface with the default IPv4 LAN gateway. It ignores
    VPN tunnels and virtual adapters and stops with an error if no routed LAN
    IPv4 is available. It runs `/usr/bin/dns-sd -P` as the current user; no
-   privileged port or Bonjour configuration is needed for port 4173.
-3. For `http://reader.local/` without a port number, configure a separate
-   port-80 Caddy service as shown below.
+   privileged port or Bonjour configuration is needed for Reader.
+3. Run Caddy on HTTPS port 443 using the configuration below.
 
-`PORT` can change the manual server and advertised port together. The Caddy
-configuration and LaunchAgent below use 4173, so leave that default in place
+`PORT` can change the manual server port. The Caddy configuration and
+LaunchAgent below use 4173, so leave that default in place
 for persistent deployment.
 
 `reader.local` is a Bonjour/mDNS hostname, not a public DNS name. A competing
 host already using `reader.local` can prevent reliable resolution; resolve
 that name conflict before using the canonical URL. On networks that block
-mDNS or isolate Wi-Fi clients, use the printed laptop IP address and port.
+mDNS or isolate Wi-Fi clients, repair LAN name resolution before using the
+canonical HTTPS URL; an IP address will not match the `reader.local` certificate.
 The server never needs an internet connection for local PDFs once npm
 dependencies are installed and the application assets have loaded.
 
 ## Persistent macOS LAN deployment
 
-A persistent macOS deployment uses a Caddy system service for port 80 and a
+A persistent macOS deployment uses a Caddy system service for HTTPS port 443 and a
 Reader LaunchAgent for port 4173 and Bonjour:
 
 ```text
 Name lookup: reader.local --Bonjour/mDNS--> Mac's current LAN IPv4
-HTTP:        LAN browser --> Caddy :80 --> 127.0.0.1:4173 --> Reader
+HTTPS:       LAN browser --> Caddy :443 --> 127.0.0.1:4173 --> Reader
 ```
 
 Reader runs under the logged-in user's account. Caddy forwards application
@@ -121,10 +122,13 @@ the user must be logged in for the LaunchAgent to run.
 Install Caddy with `brew install caddy` if needed, then put this in the
 Caddyfile used by the system service. On Apple Silicon Homebrew installations,
 it is typically `/opt/homebrew/etc/Caddyfile`; use `brew --prefix` to find the
-Homebrew directory on another Mac.
+Homebrew directory on another Mac. A copy is in
+[`deploy/Caddyfile.example`](deploy/Caddyfile.example). Preserve any other
+sites already configured in the installed Caddyfile.
 
 ```caddyfile
-http://reader.local {
+reader.local {
+    tls internal
     reverse_proxy 127.0.0.1:4173
 }
 ```
@@ -139,9 +143,41 @@ sudo brew services list
 Use `sudo brew services restart caddy` after changing its Caddyfile.
 
 `brew services list` without `sudo` checks user-level jobs, not this system
-service. Use one Caddy service for port 80. Do not launch Caddy from
-`npm start` or run Reader with `sudo`. The port-80 endpoint uses plain HTTP,
-so use it on a trusted LAN.
+service. Use one Caddy service. Do not launch Caddy from `npm start` or run
+Reader with `sudo`. Caddy's internal CA issues the private `reader.local`
+certificate; Caddy normally redirects HTTP requests to HTTPS.
+
+### Trust the local CA on each device
+
+Export the **root certificate only**, never its private key. When the local
+Caddy admin API is enabled, it serves the active public CA chain at
+`http://127.0.0.1:2019/pki/ca/local/certificates`. From the checkout, run:
+
+```sh
+npm run export-caddy-root
+curl --noproxy '*' --cacert reader-local-root.crt -I https://reader.local/
+```
+
+The script extracts the self-signed root into the ignored
+`reader-local-root.crt` and prints its SHA-256 fingerprint. The `curl` command
+confirms it authenticates the live endpoint before transfer.
+If the admin API is unavailable, inspect the service account and data
+directory with `sudo brew services list`,
+`sudo launchctl print system/homebrew.mxcl.caddy`, and `sudo caddy environ`,
+then locate `pki/authorities/local/root.crt` under that service's actual data
+directory. Do not assume the interactive user's Caddy data path is the system
+service's path. `caddy trust` can install the active local root on the Mac.
+Copy only the verified root certificate to additional devices by a private
+transfer method.
+
+On iPad/iPhone, transfer and open the certificate file, install the downloaded
+profile in Settings, then go to **Settings → General → About → Certificate
+Trust Settings** and enable **full trust** for that local root CA as described
+by [Apple](https://support.apple.com/en-au/102390). Other Macs must explicitly trust the
+same root in Keychain Access. Repeat for any other LAN client according to
+that platform's trust-store procedure. Only devices that trust this private
+CA should accept Reader's HTTPS certificate. Never install a CA private key
+on a client device.
 
 ### 2. Run Reader as a LaunchAgent
 
@@ -226,26 +262,26 @@ The script and plist contain account-specific paths.
 
 ### 3. Check the endpoint
 
-From another device on the same LAN, open `http://reader.local/`. On the Mac,
-check the HTTP response and the two listeners:
+From another trusted device on the same LAN, open `https://reader.local/`. On
+the Mac, check the HTTPS response and the two listeners:
 
 ```sh
-curl -I http://reader.local/
+curl --cacert reader-local-root.crt -I https://reader.local/
 lsof -nP -iTCP:4173 -sTCP:LISTEN
-sudo lsof -nP -iTCP:80 -sTCP:LISTEN
+sudo lsof -nP -iTCP:443 -sTCP:LISTEN
 launchctl print gui/$(id -u)/com.richard.richards-reader
 tail -f ~/Library/Logs/richards-reader.log ~/Library/Logs/richards-reader-error.log
 ```
 
-The HTTP check should return a success status. The Reader log should show the
+The HTTPS check should return a success status. The Reader log should show the
 current LAN IPv4, the `reader.local` record, and the
-`Richard's Reader._http._tcp` registration. If the Mac gets a new DHCP
+`Richard's Reader._https._tcp` registration. If the Mac gets a new DHCP
 address, restart Reader with `launchctl kickstart -k` as above; its launcher
 will advertise the new address. Caddy still proxies to `127.0.0.1:4173`.
 
-If the port-free URL returns a proxy error, check the Reader listener and
-LaunchAgent log first. If `reader.local` does not resolve, use the printed LAN
-IP and check that the network allows mDNS between devices. A port-4173 address
+If the URL returns a proxy error, check the Reader listener and LaunchAgent
+log first. If `reader.local` does not resolve, check that the network allows
+mDNS between devices. A port-4173 address
 conflict usually means a manual Reader session is running alongside the agent.
 
 Neither Caddy nor Reader's server receives local documents. A file selected
@@ -260,7 +296,7 @@ extracted text, annotations, and reading content are not uploaded to the Mac.
   Page and zoom controls are inside the original panel.
 - On a phone, **Aa** opens the settings sheet. The bottom bar keeps sentence
   navigation, play/pause and speed available while reading. Choose a verified
-  device voice in the settings sheet. The accessible view and Original PDF
+  device voice or the optional local neural voice in the settings sheet. The accessible view and Original PDF
   each have a viewport ruler with their own position. Drag the round grip in
   either view without moving the other ruler or scrolling the page. Both use
   the same appearance settings. **Follow speech with ruler** can be changed in
@@ -274,8 +310,16 @@ extracted text, annotations, and reading content are not uploaded to the Mac.
   and speech filters separately. Sentence and current-word highlight colours
   have separate controls. Presets can be edited; profiles save locally and can
   be exported or imported as JSON without document or annotation content.
-- Speech uses only voices whose browser `localService` property is exactly
-  `true`. If the browser cannot verify a device voice, Reader disables speech.
+- Device speech uses only voices whose browser `localService` property is exactly
+  `true`; it remains the default. The **English neural voice · local model** is
+  an explicit alternative. Its model, English pronunciation data and WASM
+  runtime load from Reader's own origin only after it is chosen and Play is
+  pressed. Synthesis runs in the opening device's browser; there is no cloud
+  fallback. If no verified device voice is available, select the neural voice
+  explicitly. If its assets fail, Reader reports a local error and keeps any
+  verified device voice available. Neural speech has sentence highlighting;
+  word timing is unavailable for this voice, so current-word highlighting is
+  limited to device voices that emit word boundary events.
   A single sentence click starts speech there after a brief double-click
   window. Double-clicking a word opens its offline definition without changing
   speech or source position. Drag selection and touch selection also offer
@@ -286,15 +330,21 @@ extracted text, annotations, and reading content are not uploaded to the Mac.
   the PDF.js document, clears rendered pages and extracted blocks, and stops
   speech. The app saves preferences and a page number keyed by a hash of local
   file metadata, but no document bytes or extracted text.
+- On desktop and tablet, **Review Mode** enables PDF-coordinate ink, highlight,
+  underline, strikeout, anchored comments and text boxes. Select, edit,
+  delete, undo/redo and annotation navigation are available there. On phone,
+  annotations can be viewed and navigated without precision authoring tools.
+  Marks remain in this browser session until **Export marked PDF** creates a
+  separate `-marked.pdf`; the authoritative source PDF is never overwritten.
 
 ## Architecture and security
 
 | Layer | What it contains | Where it runs |
 | --- | --- | --- |
-| Static server | Built HTML, CSS, JS, PDF.js worker, fonts | Laptop; returns files only |
+| Static server | Built HTML, CSS, JS, PDF.js worker, fonts, local models and WASM | Laptop; returns files only through Caddy HTTPS |
 | Source model | PDF.js document, page dimensions, text blocks, categories, bounding boxes, image/table regions | Opening browser and its PDF.js worker |
 | Accessible view | Reflowed prose, detected headings, source crops, visual filters | Opening browser DOM and memory |
-| Reading stream | Sentence sequence and independent speech filters | Opening browser; verified local/device speech voice |
+| Reading stream | Sentence sequence and independent speech filters | Opening browser; verified device or optional local neural voice |
 | Review layer | Session annotations in PDF page coordinates; new marked-PDF export | Opening browser only |
 
 For a **local PDF**, File API bytes go from the device's file picker into a
@@ -303,8 +353,8 @@ renders pages there. Each PDF block records a page number and bounding box in
 the PDF.js page viewport at scale 1. Cropped source regions are generated from
 local canvases.
 No client code sends PDF bytes or derived content to the laptop or elsewhere.
-The production CSP allows same-origin connections for lazy-loaded layout model
-and WASM assets, plus narrowly scoped WebAssembly compilation. It blocks
+The production CSP allows same-origin connections for lazy-loaded layout and
+neural model/WASM assets, plus narrowly scoped WebAssembly compilation. It blocks
 arbitrary external images and loads scripts, workers, and fonts only from the
 application origin in local document mode.
 The server rejects methods other than GET/HEAD and does not read request bodies.
@@ -319,10 +369,15 @@ assets. A redirect to another origin can fail. Reader does not proxy around
 the site's security policy. The URL itself may be visible in the laptop's
 HTTP request and browser history, so avoid sensitive tokens in URLs.
 
-No service worker, remote fonts, CDN, third-party JS, telemetry, cloud OCR,
+No service worker, remote fonts, CDN, remotely hosted third-party JS, telemetry, cloud OCR,
 cloud TTS, or backend document route is included. `node_modules` is installed
 at build time; runtime assets are served locally from `dist/`. See
 [third-party notices](THIRD_PARTY_NOTICES.md) and the [MIT licence](LICENSE).
+
+Caddy protects application traffic on the LAN with a private local CA;
+documents still remain entirely on the device opening them. Each client must
+explicitly trust that CA. `window.readerDiagnostics.secureContext` exposes the
+browser's local secure-context state without sending telemetry.
 
 ## Extraction policy and limits
 

@@ -14,6 +14,8 @@ font service is used by the application.
 | [PP-DocLayout-S](https://huggingface.co/PaddlePaddle/PP-DocLayout-S) and its [ONNX export](https://huggingface.co/stefanj0/PP-DocLayout-S-ONNX) | ONNX model SHA-256 `33688dbee1c23e34b81777e97cb428eb40f24b242c02b5f623484959e830aec8` | Browser-local layout proposals; weights are a separate lazy-loaded app asset | Apache-2.0 for upstream weights and ONNX export; [licence](licenses/PP-DocLayout-S-Apache-2.0.txt) |
 | [ONNX Runtime Web](https://github.com/microsoft/onnxruntime/tree/main/js/web) (`onnxruntime-web`) | 1.30.0 | Browser-local WASM and optional WebGPU inference | MIT; [notice](licenses/ONNX-Runtime-Web-MIT.txt) |
 | [pdf-lib](https://github.com/Hopding/pdf-lib) (`pdf-lib`) | 1.17.1 | Create a separate marked PDF while preserving source pages and text | MIT; [notice](licenses/pdf-lib-MIT.txt) |
+| [Dittli TTS](https://github.com/dittlihq/dittli-tts) (`@dittli/tts-core`, `@dittli/tts-en`) | 0.6.0 | Optional English neural TTS, browser-local WASM inference | Apache-2.0 for the packages and their published English model asset; [Apache text](licenses/PDFjs-Apache-2.0.txt), [upstream notice](licenses/Dittli-NOTICE.txt) |
+| [CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict) | Data repackaged by Dittli TTS 0.6.0 | English pronunciation lookup for the optional neural voice | CMU redistribution notice; [licence](licenses/CMUdict-LICENSE.txt) |
 
 The `package-lock.json` pins the full dependency tree. OpenDyslexic WOFF2
 files are committed under `public/fonts/`; Atkinson and Lexend are copied into
@@ -32,3 +34,19 @@ unmodified copies from `onnxruntime-web` 1.30.0. The WASM CPU path is the
 supported iPadOS/iPhone fallback; WebGPU is attempted only where supported.
 These application assets are fetched from Reader's own origin. Neither PDF
 pages nor extracted text are sent with those requests.
+
+The optional English neural voice uses Dittli TTS 0.6.0 and ONNX Runtime Web
+1.30.0 on the WASM CPU path. `scripts/copy-neural-assets.mjs` verifies SHA-256
+for each package asset and copies it to `public/tts/` before a build. The voice
+model is 4,723,315 bytes; CMUdict is 5,312,138 bytes; English G2P weights are
+4,486,462 bytes; metadata is 2,403 bytes; the separate WASM runtime is
+13,022,405 bytes plus a 24,180-byte loader. The model and pronunciation data
+load only after the user explicitly chooses the neural voice and presses Play.
+The package authors publish these model assets within an Apache-2.0 package.
+The original TinyTTS English checkpoint's training corpus is not clearly
+identified by its maintainers; although Dittli provides an LJSpeech training
+recipe, it does not explicitly state that the published male checkpoint came
+from that public-domain corpus. This provenance gap remains a **merge blocker**
+until the upstream authors confirm the checkpoint's training-data rights or a
+replacement model with documented provenance is selected. No model is sent to
+the Reader server for inference; it is a static same-origin application asset.

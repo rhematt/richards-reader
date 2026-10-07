@@ -90,6 +90,11 @@ introduced.
 | PROFILE-001 | Configure, export, reset and import yields exactly equal allowlisted settings; no document text, URL, history or annotation data in file. | Browser round trip. |
 | DICT-001…003 | Local headword/definition/POS and local pronunciation when supplied; offline missing-word fallback; selecting a word leaves TTS/source anchor intact. Dataset licence and load size recorded. | Unit + browser tests. |
 | TTS-LOCAL-001…003 | Device voice remains default; optional local neural voice sends no text remotely, loads only when chosen, preserves controls; absent/unsupported model gives a clear local fallback. | Browser privacy/performance test and actual iPad. |
+| HTTPS-001…010 | `https://reader.local/` uses Caddy's internal CA, proxies only static Reader resources to loopback port 4173, redirects HTTP, and reports `readerDiagnostics.secureContext`; local PDF/annotation/speech content never enters a request. The actual root CA is exported from the installed Caddy service and explicitly trusted on each device. | Caddy config and browser tests, local TLS probe, then real iPad/iPhone trust checks. |
+| ANNOT-029 | With `crypto.randomUUID` absent, a completed Pencil/pen stroke receives a locally unique ID, remains in the store, overlay and list, and its draft disappears only after commit. | Store unit test and synthetic browser pointer test. Real iPad remains a separate gate. |
+| ANNOT-030…031 | A failed commit retains the visible draft, shows a local error and offers Retry; successful retry atomically replaces the draft with a permanent mark. | Inject one commit failure in the browser test and verify the visible mark, error and recovery. |
+| ANNOT-032 | Opt-in local pointer trace contains only bounded event geometry and pointer metadata for down/move/up/cancel/capture events, with no source text or telemetry. | Browser diagnostic test, then user-captured real iPad sequence. |
+| TTS-LOCAL-004…020 | Optional bundled neural voice is lazy, browser-local and WASM-capable; speech, navigation, speed, highlighting, ruler follow, dictionary independence, filters, cancellation, engine switch and document close behave coherently. Bounded look-ahead covers only the next sentence. | Unit/state-machine and production browser/privacy tests; actual iPad/iPhone playback remains a release gate. |
 | MOBILE-REGRESSION | Primary accessible pane, source drawer and return position, touch ruler, compact TTS, no horizontal scroll in portrait/landscape; no precision authoring. | Existing mobile suite plus real iPhone Safari. |
 | TABLET/DESKTOP-REGRESSION | Dual panes, divider, source links, search, settings, bookmarks, filters and local speech. | Existing browser suite plus real iPad Safari. |
 | PRIVACY-REGRESSION | Local file loading, dictionary, speech, layout inference and annotation never POST document-derived data; application server serves only static assets. | Network instrumentation and server route tests. |
@@ -107,6 +112,15 @@ view/navigation only; 027 pre-existing PDF annotations retained. These map to
 `test/v2-annotations.test.mjs`, a browser interaction suite, and external
 Preview/browser/Acrobat reopening checks. Export must create a new file and
 must never silently overwrite the source.
+
+**Real iPad V2 gate:** The user observed a Pencil stroke that rendered during
+drawing and disappeared after lift on the former insecure HTTP deployment.
+This is a failed real-device result. `ANNOT-029` tests the missing
+`crypto.randomUUID` path; `ANNOT-030/031` test transactional recovery; the
+synthetic Chromium tablet test covers pointer cancellation and palm-shaped
+contacts. These automated results do not pass `ANNOT-025` or the new real iPad
+Pencil/palm/export gate. The user will retest on trusted HTTPS and report the
+actual Safari pointer trace if needed.
 
 ### Release gates and measurements
 
@@ -177,30 +191,42 @@ double-click dictionary/speech arbitration, two independent pane rulers,
 current-word colour and legacy profile import, a symbol-free matrix owned by a
 high-confidence layout region, borderless/irregular table source
 preservation, rotated page-furniture geometry, and wrapped figure captions.
-`npm test` passes 36/36; `npm run build` succeeds; `npm audit`
-finds zero vulnerabilities. The production CSP browser run also passes.
+The HTTPS and annotation-commit patch adds a Caddy internal-CA template,
+loopback-only Reader service, origin-independent annotation IDs, transactional
+stroke commit and opt-in bounded pointer diagnostics. The optional English
+neural voice runs through browser-local ONNX/WASM, loads only after Play,
+buffers at most the next sentence and uses the existing logical speech stream.
+`npm test` passes 40/40; `npm run build` succeeds; `npm audit` finds zero
+vulnerabilities. The production CSP browser run also passes. These browser
+tests run Edge on macOS, including synthetic touch and pen events.
 
 The fixture matrix above is a target contract, not a claim that every listed
 case is implemented. Remaining release gates include the broader named PDF
-fixture corpus, optional local neural TTS, deeper annotation/export cases,
-external PDF viewer checks, and real iPad/iPhone Safari testing. The user will
-perform those device checks later.
+fixture corpus, deeper annotation/export cases, Acrobat interoperability,
+checkpoint training-data provenance, and real iPad/iPhone Safari testing. The
+user will perform those device checks later.
 
-### Optional neural voice evaluation, 7 Oct 2026
+### Optional local neural voice, 7 Oct 2026
 
-The existing verified device voice remains the default. The archived
-[MIT Piper implementation](https://github.com/rhasspy/piper) and the current
-[GPL-3.0 Piper successor](https://github.com/OHF-Voice/piper1-gpl) have
-different code licences. Piper's [voice catalogue](https://huggingface.co/rhasspy/piper-voices)
-requires checking the individual model card and training-data terms before a
-voice can be redistributed; a catalogue-level licence is insufficient.
-[ONNX Runtime Web](https://onnxruntime.ai/docs/get-started/with-javascript/web.html)
-supports WASM in iOS Safari but does not list WebGPU support there. No voice
-model or phonemisation runtime has been bundled yet. A local neural path needs
-its own verified voice licence, a lazy model load, sentence/highlight/ruler
-integration, and real iPad memory and responsiveness measurements. Until
-those pass, Reader uses only its verified device-local voices and has no cloud
-speech fallback.
+The verified device voice remains the default. An explicitly selected Dittli
+TTS 0.6.0 English voice uses a 4,723,315-byte model, 5,312,138-byte CMUdict,
+4,486,462-byte English G2P model, 2,403-byte metadata file, and a
+13,022,405-byte WASM CPU runtime with a 24,180-byte loader. These assets are
+same-origin application resources and load only on the first neural Play.
+Synthesis, bounded one-sentence look-ahead and Web Audio playback remain in
+the opening browser. The normal device path requires none of these assets.
+The production Edge browser regression observed approximately 1.9 seconds
+initialisation and 77–79 ms first-sentence synthesis on this Mac, with about
+41–68 MB reported JavaScript heap across runs. That heap metric excludes some
+WASM and browser process memory. The test verifies navigation, pause/resume,
+Stop, source-linked ruler follow, dictionary isolation, document-close
+cancellation, and GET-only same-origin asset requests without speech text.
+The model has no reliable word timings, so only sentence highlighting is
+offered for this voice. Real iPad/iPhone latency, memory, long-document and
+rotation results remain pending. The package publishes the model under
+Apache-2.0, but the original English checkpoint's training corpus is not
+identified clearly enough to certify its training-data rights; see
+`THIRD_PARTY_NOTICES.md`. This is a merge blocker. There is no cloud fallback.
 
 ## Mobile UI acceptance — `mobile-ui` branch
 
@@ -258,10 +284,10 @@ browser suites (9/9 each). Actual iPhone verification remains pending.
 
 Run `npm run build && npm start` on a macOS laptop with a default IPv4 LAN
 route. The launcher must select that route's interface and current IPv4 address,
-bind Reader on `0.0.0.0:4173`, pass a local HTTP health check, register both the
-`reader.local` address record and `Richard's Reader._http._tcp` service, and
-print working localhost, LAN-IP and `reader.local:4173` URLs. A separately
-managed Caddy service may forward port 80 to 4173 for `http://reader.local/`.
+bind Reader only on `127.0.0.1:4173`, pass a loopback HTTP health check, register
+the `reader.local` address record and `Richard's Reader._https._tcp` service,
+and print `https://reader.local/`. The separately managed Caddy service must
+terminate TLS on port 443 using its internal CA and proxy only to loopback.
 No static IP, privileged Reader process, document endpoint or Caddy subprocess
 is permitted. SIGINT and SIGTERM must remove the Bonjour child and stop Reader.
 
@@ -271,17 +297,18 @@ exclusion of VM/VPN interfaces, failure without a routed LAN IPv4, termination
 order, and rejection of a renamed Bonjour service. These are simulated network
 states; they do not change the Mac's real DHCP lease.
 
-**Live Mac result, 6 Oct 2026:** Passed at the Mac's current DHCP address
-on `en0`. The launcher received both `dns-sd` registration
-replies; HEAD requests to `http://reader.local:4173/` and, through the
-separately running Caddy service, `http://reader.local/` returned HTTP 200 with
-the local-mode CSP. On separate SIGTERM and SIGINT runs, the launcher,
-`dns-sd` child and port-4173 listener were absent afterward. A deliberate
-duplicate manual advertisement caused Bonjour to rename the service to
-`Richard's Reader (2)`; the launcher reported that conflict and cleaned up.
-The actual DHCP lease was not changed during this test. After a future lease
-change, stop and restart Reader and confirm the printed LAN IP and
-`reader.local` resolution use the new address.
+**Historical HTTP result, 6 Oct 2026:** The old LAN configuration passed an
+HTTP/port-4173 connectivity check. That result does not establish HTTPS
+acceptance for V2.
+
+**Current Mac HTTPS result, 7 Oct 2026:** The installed Caddyfile contains
+`tls internal` and proxies to `127.0.0.1:4173`. `http://reader.local/`
+redirected with 308 to `https://reader.local/`. The Caddy admin API returned
+the active public root; `npm run export-caddy-root` extracted it, and `curl`
+with that root verified HTTPS 200. The Reader LaunchAgent was restarted and
+`lsof` showed its Node server bound only to `127.0.0.1:4173`. The live HTTPS
+response carried the current `script-src 'self' 'wasm-unsafe-eval'` and
+`connect-src 'self'` CSP. Trust installation on iPad/iPhone is still pending.
 
 ## IPAD-PDF-001 — Local PDF opens and extracts on iPadOS
 
