@@ -28,7 +28,7 @@ async function currentLanAddress() {
 
 export function bonjourRegistrationReady(output) {
   const record = /Got a reply for record ([^:\r\n]+): Name now registered and active/i.exec(output)?.[1];
-  const service = /Got a reply for service ([^\r\n]+?)\._http\._tcp\.local\.?: Name now registered and active/i.exec(output)?.[1];
+  const service = /Got a reply for service ([^\r\n]+?)\._https\._tcp\.local\.?: Name now registered and active/i.exec(output)?.[1];
   if (record && record !== 'reader.local') {
     throw new Error(`Bonjour renamed reader.local to ${record}; resolve the hostname conflict.`);
   }
@@ -152,23 +152,21 @@ async function main() {
   });
   try {
     server = startChild(process.execPath, [serverPath], {
-      cwd: root, env: { ...process.env, HOST: '0.0.0.0', PORT: String(port) }
+      cwd: root, env: { ...process.env, HOST: '127.0.0.1', PORT: String(port) }
     });
     server.once('exit', () => { if (!stopping) void stop(1); });
     await waitForText(server, /Reader app files listening on /, 'Reader server');
     await waitForHealth(port, server);
     if (stopping) return;
     advertisement = startChild('/usr/bin/dns-sd', [
-      '-P', "Richard's Reader", '_http._tcp', 'local', String(port), 'reader.local', address
+      '-P', "Richard's Reader", '_https._tcp', 'local', '443', 'reader.local', address
     ], { cwd: root });
     advertisement.once('exit', () => { if (!stopping) void stop(1); });
     await waitForText(advertisement, bonjourRegistrationReady, 'Bonjour registration');
     if (stopping) return;
     process.stdout.write(`\nRichard's Reader running (${interfaceName})\n` +
-      `Local:   http://localhost:${port}\n` +
-      `LAN:     http://${address}:${port}\n` +
-      `Reader:  http://reader.local:${port}\n` +
-      (port === 4173 ? 'With a separate port-80 proxy: http://reader.local\n' : '') +
+      `Application server: http://127.0.0.1:${port} (loopback only)\n` +
+      `Reader:  https://reader.local/ (Caddy on this Mac)\n` +
       'Press Ctrl-C to stop the server and Bonjour advertisement.\n');
   } catch (error) {
     process.stderr.write(`Reader startup failed: ${error.message}\n`);

@@ -9,7 +9,7 @@ if (process.getuid?.() === 0) {
 }
 const root = resolve('dist');
 const port = Number(process.env.PORT || 4173);
-const host = process.env.HOST || '0.0.0.0';
+const host = process.env.HOST || '127.0.0.1';
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff',
@@ -19,7 +19,7 @@ const types = {
 };
 function requestedOrigin(requestUrl) {
   try {
-    const route = new URL(requestUrl, 'http://reader.local');
+    const route = new URL(requestUrl, 'https://reader.local');
     const target = route.searchParams.get('url') || (/^\/https?:\/\//i.test(route.pathname) ? decodeURIComponent(route.pathname.slice(1)) : null);
     if (!target) return null;
     const url = new URL(target);
@@ -48,7 +48,7 @@ createServer(async (request, response) => {
     response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return;
   }
   let pathname;
-  try { pathname = new URL(request.url, 'http://reader.local').pathname; }
+  try { pathname = new URL(request.url, 'https://reader.local').pathname; }
   catch { response.writeHead(400); response.end(); return; }
   const assetPath = resolve(root, '.' + pathname);
   const inside = assetPath === root || assetPath.startsWith(root + sep);

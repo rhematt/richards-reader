@@ -75,9 +75,9 @@ test('LAN-MDNS-001: stopping Reader removes Bonjour before stopping the server',
 
 test('LAN-MDNS-001: waits for both Bonjour records and rejects a renamed service', () => {
   const host = 'Got a reply for record reader.local: Name now registered and active\n';
-  const service = "Got a reply for service Richard's Reader._http._tcp.local.: Name now registered and active\n";
+  const service = "Got a reply for service Richard's Reader._https._tcp.local.: Name now registered and active\n";
   assert.equal(bonjourRegistrationReady(host), false);
   assert.equal(bonjourRegistrationReady(host + service), true);
-  assert.throws(() => bonjourRegistrationReady(host + service.replace('Reader._http', 'Reader (2)._http')),
+  assert.throws(() => bonjourRegistrationReady(host + service.replace('Reader._https', 'Reader (2)._https')),
     /competing registration/);
 });
